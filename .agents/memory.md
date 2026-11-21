@@ -1,0 +1,73 @@
+# Memory
+
+## 2026-11-20 — Project shape and purpose
+
+`freepi-plugin` is a pi/omp extension (not a standalone daemon) forked from `~/projects/freepi-proxy`.
+It exposes free-pi (freepi.ai) as a native provider plus commands and an in-process
+OpenAI-compatible server.
+
+- Zero runtime dependencies, ESM, TypeScript run directly by Node ≥ 22.19 with type stripping.
+- `package.json` carries both `pi.extensions` and `omp.extensions` → `src/index.ts`.
+- Data dir `~/.freepi-plugin` (`FREEPI_PLUGIN_DATA_DIR`): `token`, `session-id`, `client-version`,
+  plus probe outputs.
+- The plugin owns `~/.freepi-plugin/token`; it must not overwrite `~/.free-pi/agent/credentials.json`.
+- `npm test` runs `node --test test/*.test.mjs`.
+
+## 2026-11-20 — Provider registration and server lifecycle
+
+- Provider id `freepi`, API `openai-completions`, base URL `http://127.0.0.1:<port>/v1`.
+- Server starts once per host process via `ensureServer()`; preferred port 8473
+  (`FREEPI_PLUGIN_PORT`), probing upward 20 attempts. Observed sessions bind 8473–8475.
+- Binds loopback only.
+- Login uses the GitHub device flow: canonical `onAuth` plus legacy `onDeviceCode` callback.
+  Device URL prints as `https://github.com/login/device?user_code=…`.
+- Model metadata mirrors free-pi-cli 0.6.25: `contextWindow: 200_000`, `maxTokens: 32_768`,
+  `reasoning: true`, `compat.supportsDeveloperRole: false`.
+
+## 2026-11-20 — Metering and ad invariants
+
+- Every completion turn must run `/ads/next`, optionally the Gravity pixel, then `/ads/impression`.
+  Never bypass, spoof, or hide ad/impression reporting or metering.
+- Local estimate: `(prompt + completion) * multiplier * 0.00222` credits
+  (`EST_CREDITS_PER_TOKEN`). Catalog: 15,000 credits/day ≈ $1.125.
+- Upstream 4xx/5xx pass through and are never cached. Only documented spent-session errors retry,
+  once, with a fresh session.
+
+## 2026-11-20 — Context window observed
+
+`scripts/probe-context.mjs` on `deepseek-v4.1-flash`: ~213,363 prompt tokens accepted; next step
+rejected with `context_too_long`. Boundary ~213k–240k; declared 200k is conservative. Results in
+`~/.freepi-plugin/context-probe.json`.
+
+## 2026-11-21 — Billing classification (27 models)
+
+`scripts/probe-billing.mjs` sends one small ad-attributed turn per model and polls `/me/stats`.
+One upstream session is reused; if 4 live CLI sessions exist, the account returns 409 until
+`POST /session/reset` or lease expiry.
+
+Bucket 1 — no quota hit (catalog `free: true`): `particle`, `deepseek-v4.1-flash`,
+`glm-5.3-flash`, `deepseek-v4-flash`.
+
+Bucket 2 — charged against the daily allowance: `gpt-oss-20b`, `hy4-flash`, `ling-3.0-flash`,
+`ling-3.1-flash`, `qwen3.7-flash`, `solar-mini-4`.
+
+Bucket 3 — `403 model_requires_credits` without purchased premium credits: every other catalog model
+(all ≥1.6x plus `mimo-v2.6-flash`).
+
+Gotcha: the CLI premium-refusal message calls `hy4-flash` free, but it bills (4000-token prompt
+cost 3 credits). Catalog `free` is the authoritative no-charge signal. `deepseek-v4-flash` is free
+by catalog, so there is no paid model that avoids the allowance.
+
+`--plan` prints worst-case cost; `--model`/`--models`/`--all` select probes; `--budget` stops early.
+
+## 2026-11-21 — Command surface and autocomplete
+
+- `/freepi` with no args = summary: server URL, model/free counts, login state, handle·tier,
+  one quota line, hint line. Subcommands `quota`, `models`, `login`, `server`, `help`.
+- `/freepi quota` and `/freepi-quota` show the full quota report. Do not fold the default view back
+  into the quota view.
+- Argument completion uses `getArgumentCompletions(prefix)` returning pi-tui `AutocompleteItem`
+  (`value`, `label`, optional `description`). Prefix `q` → `quota`.
+- omp's RPC still advertises `input: {"hint":"arguments"}` for extension commands and drops custom
+  `input.hint`; command argument completion still works, because it comes from
+  `getArgumentCompletions`.
