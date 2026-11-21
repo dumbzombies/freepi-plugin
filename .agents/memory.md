@@ -103,3 +103,8 @@ the daily allowance. Set `models.showPremium true` to expose the 403 bucket.
 Enter toggles booleans or opens `ctx.ui.editor` for numbers/strings/lists, Esc closes. Hosts without
 `custom` fall back to the text listing. Explicit `show|get|set|unset|reset|path|help` actions remain
 for scripting.
+
+## 2026-11-21 — Removed standalone /freepi-quota
+
+The separate `/freepi-quota` command is gone. Quota lives only under `/freepi quota`; the
+`freepi_quota` tool remains for the model.

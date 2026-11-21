@@ -39,7 +39,6 @@ For `pi`, install the same directory as an extension package (its `package.json`
 /model freepi/...      # pick a free-pi model
 /freepi                # status: server, models, login, handle/tier, quota line
 /freepi quota          # full quota: credits left, used, refill, streak
-/freepi-quota          # quota only
 /freepi models         # registered model list (premium-only models hidden)
 /freepi config         # show every setting
 /freepi settings       # same as /freepi config

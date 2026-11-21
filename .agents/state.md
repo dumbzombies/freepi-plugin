@@ -13,7 +13,7 @@ session rotation, and response caching.
 - Provider `freepi` registered with free-pi-cli 0.6.25 metadata; `/login freepi` verified with
   account `@dumbzombies`.
 - Commands: `/freepi` (status summary, plus `quota|models|config|settings|login|server|help`),
-  `/freepi-quota` (quota only), `freepi_quota` tool. Subcommands complete via
+  `freepi_quota` tool. Subcommands complete via
   `getArgumentCompletions`.
 - `/freepi config` = `/freepi settings`: show/get/set/unset/reset/path/help over
   `~/.freepi-plugin/settings.json` (baseUrl, port, cache limits, ads.gravity, model filters and

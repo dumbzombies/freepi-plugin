@@ -306,7 +306,7 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
     ctx.ui.notify(renderQuota(view), view.ok ? "info" : "warning");
   };
 
-  /** One-screen account/plugin status. Quota detail lives in /freepi-quota. */
+  /** One-screen account/plugin status. Quota detail lives in /freepi quota. */
   const status = async (ctx: CommandCtx): Promise<void> => {
     const token = await loadToken();
     const catalog = running.ctx.upstream.catalog;
@@ -617,15 +617,6 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
       }
       await status(ctx);
     },
-  });
-
-  pi.registerCommand("freepi-quota", {
-    description: "Show the free-pi daily credit quota",
-    input: { hint: "" },
-    getArgumentCompletions(): CompletionItem[] {
-      return [];
-    },
-    handler: quota,
   });
 
   pi.registerTool({
