@@ -1,0 +1,31 @@
+{
+  "name": "freepi-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "pi/omp plugin: free-pi provider with /login, quota, ads, and an in-process OpenAI-compatible API",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "pi": {
+    "extensions": ["src/index.ts"]
+  },
+  "omp": {
+    "extensions": ["src/index.ts"]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "keywords": [
+    "pi",
+    "omp",
+    "free-pi",
+    "openai",
+    "provider",
+    "extension"
+  ]
+}
