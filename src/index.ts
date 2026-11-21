@@ -8,6 +8,7 @@ import { deviceLogin, loadToken, tokenExpiry } from "./token.ts";
 import { quotaView, type QuotaView } from "./state.ts";
 import { startGravityPixel } from "./gravity.ts";
 import type { Catalog, CatalogModel } from "./upstream.ts";
+import { isModelVisible } from "./visibility.ts";
 import {
   SETTINGS_PATH,
   SETTING_KEYS,
@@ -26,6 +27,17 @@ import {
 
 interface Ui {
   notify(message: string, type?: "info" | "warning" | "error"): void;
+  /** Host custom component; absent in non-interactive RPC hosts. */
+  custom?<T>(factory: (tui: { requestRender(): void }, theme: {
+    fg?(color: string, text: string): string;
+    bold?(text: string): string;
+  }, keybindings: unknown, done: (result: T) => void) => {
+    render(width: number): string[];
+    handleInput(data: string): void;
+    invalidate?(): void;
+    dispose?(): void;
+  }): Promise<T>;
+  editor?(title: string, prefill?: string): Promise<string | undefined>;
 }
 
 interface CommandCtx {
@@ -148,9 +160,7 @@ function toProviderModel(m: CatalogModel, settings: Settings): ProviderModel {
 }
 
 function visibleCatalogModels(catalog: Catalog | null, settings: Settings): CatalogModel[] {
-  return (catalog?.models ?? []).filter((m) =>
-    !m.unavailable && !settings.models.hidden.includes(m.id) && (!settings.models.freeOnly || m.free === true),
-  );
+  return (catalog?.models ?? []).filter((m) => isModelVisible(m, settings));
 }
 
 function providerModels(catalog: Catalog | null, settings: Settings): ProviderModel[] {
@@ -363,8 +373,141 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
     return configActions.filter((a) => a.value.startsWith(text.toLowerCase()));
   };
 
+  const selectSetting = async (ctx: CommandCtx): Promise<string | null> => {
+    if (!ctx.ui.custom) return null;
+    return await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+      const fg = (color: string, text: string) => theme.fg ? theme.fg(color, text) : text;
+      const bold = (text: string) => theme.bold ? theme.bold(text) : text;
+      let cursor = 0;
+      let query = "";
+      let cached: string[] | undefined;
+      const visible = () => {
+        const q = query.trim().toLowerCase();
+        if (!q) return SETTING_KEYS;
+        return SETTING_KEYS.filter((k) => `${k.path} ${k.description}`.toLowerCase().includes(q));
+      };
+      const refresh = () => {
+        cached = undefined;
+        tui.requestRender();
+      };
+      return {
+        render(width: number) {
+          const w = Math.max(20, width);
+          if (cached) return cached;
+          const items = visible();
+          if (items.length === 0) cursor = 0;
+          else if (cursor >= items.length) cursor = items.length - 1;
+          const cut = (line: string) => line.length > w ? line.slice(0, w - 1) + "…" : line;
+          const lines = [cut(fg("accent", "─".repeat(w))), cut(` ${fg("accent", bold("free-pi settings"))}`)];
+          lines.push(cut(` ${fg("text", `Search: ${query || "-"}`)}`), "");
+          if (items.length === 0) {
+            lines.push(cut(fg("warning", " No matches.")));
+          } else {
+            const max = 14;
+            const start = Math.max(0, Math.min(cursor - Math.floor(max / 2), Math.max(0, items.length - max)));
+            const end = Math.min(items.length, start + max);
+            for (let i = start; i < end; i++) {
+              const key = items[i];
+              const active = i === cursor;
+              const value = formatValue(key, currentSettings ?? defaultSettings());
+              const suffix = key.restart ? fg("dim", "  (restart)") : "";
+              const prefix = active ? fg("accent", "> ") : "  ";
+              const label = active ? fg("accent", key.path) : fg("text", key.path);
+              lines.push(cut(`${prefix}${label} = ${value}${suffix}`));
+              if (active) lines.push(cut(`   ${fg("muted", key.description)}`));
+            }
+          }
+          lines.push("", cut(fg("dim", " type to filter • ↑↓ move • enter edit/toggle • esc done")), cut(fg("accent", "─".repeat(w))));
+          cached = lines;
+          return lines;
+        },
+        invalidate() { cached = undefined; },
+        handleInput(data: string) {
+          const items = visible();
+          if (data === "\u001b[A" || data === "\u001bOA") {
+            if (items.length) cursor = cursor === 0 ? items.length - 1 : cursor - 1;
+            refresh();
+            return;
+          }
+          if (data === "\u001b[B" || data === "\u001bOB") {
+            if (items.length) cursor = cursor === items.length - 1 ? 0 : cursor + 1;
+            refresh();
+            return;
+          }
+          if (data === "\r" || data === "\n") {
+            done(items[cursor]?.path ?? null);
+            return;
+          }
+          if (data === "\u001b" || data === "\u0003") {
+            done(null);
+            return;
+          }
+          if (data === "\u007f" || data === "\b") {
+            if (query) { query = query.slice(0, -1); cursor = 0; refresh(); }
+            return;
+          }
+          if (data >= " " && !data.startsWith("\u001b")) {
+            query += data;
+            cursor = 0;
+            refresh();
+          }
+        },
+      };
+    });
+  };
+
+  const editSetting = async (ctx: CommandCtx, path: string): Promise<void> => {
+    const key = findKey(path);
+    if (!key) return;
+    if (key.type === "boolean") {
+      const next = structuredClone(await effectiveSettings());
+      try {
+        key.set(next, String(!(key.get(next) as boolean)));
+      } catch (e) {
+        ctx.ui.notify(`free-pi config: ${e instanceof Error ? e.message : String(e)}`, "error");
+        return;
+      }
+      await saveSettings(next);
+      applySettings(next);
+      ctx.ui.notify(`${key.path} = ${formatValue(key, next)}${key.restart ? " Restart omp to apply." : ""}`, "info");
+      return;
+    }
+    if (!ctx.ui.editor) {
+      ctx.ui.notify(`Edit without a UI: /freepi config set ${key.path} <value>`, "info");
+      return;
+    }
+    const raw = await ctx.ui.editor(`${key.path} — ${key.description}`, formatValue(key, await effectiveSettings()));
+    if (raw === undefined) return;
+    const next = structuredClone(await effectiveSettings());
+    try {
+      setSetting(next, key.path, raw);
+    } catch (e) {
+      ctx.ui.notify(`free-pi config: ${e instanceof Error ? e.message : String(e)}`, "error");
+      return;
+    }
+    await saveSettings(next);
+    applySettings(next);
+    ctx.ui.notify(`${key.path} = ${formatValue(key, next)}${key.restart ? " Restart omp to apply." : ""}`, "info");
+  };
+
+  const settingsMenu = async (ctx: CommandCtx): Promise<void> => {
+    if (!ctx.ui.custom) {
+      ctx.ui.notify(formatSettings(await effectiveSettings()), "info");
+      return;
+    }
+    for (;;) {
+      const path = await selectSetting(ctx);
+      if (!path) return;
+      await editSetting(ctx, path);
+    }
+  };
+
   const config = async (args: string, ctx: CommandCtx): Promise<void> => {
     const parts = args.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) {
+      await settingsMenu(ctx);
+      return;
+    }
     const action = (parts[0] ?? "show").toLowerCase();
     if (action === "show") {
       ctx.ui.notify(formatSettings(await effectiveSettings()), "info");

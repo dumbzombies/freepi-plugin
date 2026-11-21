@@ -19,7 +19,7 @@ export interface Settings {
   port: number;
   cache: { enabled: boolean; ttlMs: number; maxEntries: number; maxBytes: number };
   ads: { gravity: boolean };
-  models: { freeOnly: boolean; hidden: string[]; contextWindow: number; maxTokens: number };
+  models: { freeOnly: boolean; showPremium: boolean; hidden: string[]; contextWindow: number; maxTokens: number };
 }
 
 export const SETTINGS_PATH = join(DATA_DIR, "settings.json");
@@ -35,7 +35,7 @@ export function defaultSettings(): Settings {
       maxBytes: CACHE_MAX_BYTES,
     },
     ads: { gravity: true },
-    models: { freeOnly: false, hidden: [], contextWindow: 200_000, maxTokens: 32_768 },
+    models: { freeOnly: false, showPremium: false, hidden: [], contextWindow: 200_000, maxTokens: 32_768 },
   };
 }
 
@@ -152,6 +152,16 @@ export const SETTING_KEYS: SettingKey[] = [
     get: (s) => s.models.freeOnly,
     set: (s, raw) => {
       s.models.freeOnly = parseBool(raw);
+    },
+  },
+  {
+    path: "models.showPremium",
+    type: "boolean",
+    description: "show models that require purchased premium credits (403 without them)",
+    restart: true,
+    get: (s) => s.models.showPremium,
+    set: (s, raw) => {
+      s.models.showPremium = parseBool(raw);
     },
   },
   {

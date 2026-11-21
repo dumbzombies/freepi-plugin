@@ -40,6 +40,9 @@ omp plugin link ~/projects/freepi-plugin
 - Every completion turn runs `/ads/next`, optional Gravity pixel, `/ads/impression`. Never bypass,
   spoof, or hide ad/metering traffic.
 - Settings live in `~/.freepi-plugin/settings.json`, edited by `/freepi config` (alias
-  `/freepi settings`). Cache and Gravity apply live; port/baseUrl/model presentation need a restart.
+  `/freepi settings`); no-arg form is an interactive menu. Cache and Gravity apply live;
+  port/baseUrl/model presentation need a restart.
+- Models that 403 without purchased credits (`models.showPremium=false`) and free-only filtering live
+  in `src/visibility.ts`, shared by provider registration and `/v1/models`.
 - Server binds loopback only; port 8473 with upward probing.
 - Upstream errors pass through and are not cached; only spent-session errors retry (once).

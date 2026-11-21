@@ -40,7 +40,7 @@ For `pi`, install the same directory as an extension package (its `package.json`
 /freepi                # status: server, models, login, handle/tier, quota line
 /freepi quota          # full quota: credits left, used, refill, streak
 /freepi-quota          # quota only
-/freepi models         # registered model list
+/freepi models         # registered model list (premium-only models hidden)
 /freepi config         # show every setting
 /freepi settings       # same as /freepi config
 ```
@@ -50,10 +50,11 @@ For `pi`, install the same directory as an extension package (its `package.json`
 
 ## Configuration
 
-`/freepi config` and `/freepi settings` are the same command:
+`/freepi config` and `/freepi settings` are the same command. With no arguments it opens an
+interactive menu: type to filter, `↑`/`↓` move, `Enter` edits or toggles, `Esc` closes.
 
 ```
-/freepi config                      # show all settings with effective values
+/freepi config                      # interactive settings menu
 /freepi config get <key>
 /freepi config set <key> <value>    # persisted to ~/.freepi-plugin/settings.json
 /freepi config unset <key>          # back to its default
@@ -74,6 +75,7 @@ Settings override environment defaults. `cache.*` and `ads.gravity` apply immedi
 |`cache.maxBytes`|`33554432`|Cached response byte cap|
 |`ads.gravity`|`true`|Attach Gravity ad context when the SDK exists|
 |`models.freeOnly`|`false`|Expose only catalog models marked free|
+|`models.showPremium`|`false`|Show models that 403 without purchased premium credits|
 |`models.hidden`|empty|Comma-separated model ids to hide|
 |`models.contextWindow`|`200000`|Advertised context window|
 |`models.maxTokens`|`32768`|Advertised max output tokens|

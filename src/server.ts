@@ -11,6 +11,7 @@ import { completeWithSessionRetry, createState, quotaView, type Ctx } from "./st
 import { loadToken } from "./token.ts";
 import { Upstream } from "./upstream.ts";
 import { defaultSettings, type Settings } from "./settings.ts";
+import { isModelVisible } from "./visibility.ts";
 
 /** Request bodies larger than this are rejected: huge prompts should not
  * occupy process memory indefinitely. */
@@ -72,10 +73,8 @@ async function pipe(res: ServerResponse, stream: ReadableStream<Uint8Array>, con
 }
 
 function modelsPayload(ctx: Ctx): unknown {
-  const { freeOnly, hidden } = ctx.settings.models;
   const data = (ctx.upstream.catalog?.models ?? [])
-    .filter((m) => !freeOnly || m.free === true)
-    .filter((m) => !hidden.includes(m.id))
+    .filter((m) => isModelVisible(m, ctx.settings))
     .filter((m) => !m.unavailable)
     .map((m) => ({
       id: m.id,

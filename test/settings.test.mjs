@@ -23,12 +23,14 @@ const {
 } = await import("../src/settings.ts");
 const { ResponseCache } = await import("../src/cache.ts");
 const { startServer } = await import("../src/server.ts");
+const { isPremiumOnly, isModelVisible } = await import("../src/visibility.ts");
 
 test("settings default to env-backed config values", async () => {
   const s = await loadSettings();
   assert.equal(s.port, 18483);
   assert.equal(s.cache.enabled, true);
   assert.deepEqual(s.models.hidden, []);
+  assert.equal(s.models.showPremium, false);
   assert.equal(SETTINGS_PATH, join(home, "data", "settings.json"));
 });
 
@@ -106,8 +108,26 @@ test("server model list honors freeOnly and hidden", async () => {
 
     running.ctx.settings = { ...settings, models: { ...settings.models, freeOnly: false, hidden: [] } };
     const all = await (await fetch(`${running.url}/models`)).json();
-    assert.deepEqual(all.data.map((m) => m.id), ["free-a", "hidden-free", "paid-b"]);
+    assert.deepEqual(all.data.map((m) => m.id), ["free-a", "hidden-free"]);
+
+    running.ctx.settings = { ...settings, models: { ...settings.models, freeOnly: false, hidden: [], showPremium: true } };
+    const premium = await (await fetch(`${running.url}/models`)).json();
+    assert.deepEqual(premium.data.map((m) => m.id), ["free-a", "hidden-free", "paid-b"]);
   } finally {
     await running.close();
   }
+});
+
+test("premium-only models are hidden unless showPremium is on", () => {
+  const base = { name: "x", multiplier: 0 };
+  assert.equal(isPremiumOnly({ ...base, id: "free", free: true }), false);
+  assert.equal(isPremiumOnly({ ...base, id: "charged", free: false }), false);
+  assert.equal(isPremiumOnly({ ...base, id: "big", free: false, multiplier: 1 }), true);
+  assert.equal(isPremiumOnly({ ...base, id: "mimo-v2.6-flash", free: false, multiplier: 0.8 }), true);
+
+  const settings = defaultSettings();
+  const premium = { ...base, id: "big", free: false, multiplier: 2 };
+  assert.equal(isModelVisible(premium, settings), false);
+  assert.equal(isModelVisible(premium, { ...settings, models: { ...settings.models, showPremium: true } }), true);
+  assert.equal(isModelVisible({ ...base, id: "big", free: false, multiplier: 2, unavailable: true }, settings), false);
 });
