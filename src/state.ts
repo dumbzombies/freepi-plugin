@@ -17,6 +17,8 @@ export interface Ctx {
   upstream: Upstream;
   state: PluginState;
   cache: ResponseCache;
+  /** Effective plugin settings for model filtering and live toggles. */
+  settings: import("./settings.ts").Settings;
   /** Gravity context for the ad cycle, when the SDK is available. */
   gravityContext?: (jwt: string) => string | undefined;
 }

@@ -5,21 +5,23 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
-import { PREFERRED_PORT, PORT_ATTEMPTS } from "./config.ts";
+import { PORT_ATTEMPTS } from "./config.ts";
 import { ResponseCache } from "./cache.ts";
 import { completeWithSessionRetry, createState, quotaView, type Ctx } from "./state.ts";
 import { loadToken } from "./token.ts";
 import { Upstream } from "./upstream.ts";
+import { defaultSettings, type Settings } from "./settings.ts";
 
 /** Request bodies larger than this are rejected: huge prompts should not
  * occupy process memory indefinitely. */
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 
-export function createCtx(): Ctx {
+export function createCtx(settings: Settings = defaultSettings()): Ctx {
   return {
-    upstream: new Upstream(),
+    settings,
+    upstream: new Upstream(settings.baseUrl),
     state: { sessionId: crypto.randomUUID(), startedAt: Date.now() },
-    cache: new ResponseCache(),
+    cache: new ResponseCache(settings.cache),
   };
 }
 
@@ -70,7 +72,10 @@ async function pipe(res: ServerResponse, stream: ReadableStream<Uint8Array>, con
 }
 
 function modelsPayload(ctx: Ctx): unknown {
+  const { freeOnly, hidden } = ctx.settings.models;
   const data = (ctx.upstream.catalog?.models ?? [])
+    .filter((m) => !freeOnly || m.free === true)
+    .filter((m) => !hidden.includes(m.id))
     .filter((m) => !m.unavailable)
     .map((m) => ({
       id: m.id,
@@ -189,14 +194,14 @@ export interface RunningServer {
 }
 
 /** Bind loopback, probing upward when the preferred port is taken. */
-export async function startServer(): Promise<RunningServer> {
-  const ctx = createCtx();
+export async function startServer(settings: Settings = defaultSettings()): Promise<RunningServer> {
+  const ctx = createCtx(settings);
   ctx.state = await createState();
   const handler = createHandler(ctx);
 
   let lastError: unknown;
   for (let i = 0; i < PORT_ATTEMPTS; i++) {
-    const port = PREFERRED_PORT + i;
+    const port = settings.port + i;
     const server: Server = createServer((req, res) => void handler(req, res));
     const bound = await new Promise<boolean>((resolve) => {
       const onError = (err: NodeJS.ErrnoException) => {

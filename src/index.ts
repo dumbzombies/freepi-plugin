@@ -8,6 +8,19 @@ import { deviceLogin, loadToken, tokenExpiry } from "./token.ts";
 import { quotaView, type QuotaView } from "./state.ts";
 import { startGravityPixel } from "./gravity.ts";
 import type { Catalog, CatalogModel } from "./upstream.ts";
+import {
+  SETTINGS_PATH,
+  SETTING_KEYS,
+  defaultSettings,
+  findKey,
+  formatSettings,
+  formatValue,
+  loadSettings,
+  resetSettings,
+  saveSettings,
+  setSetting,
+  type Settings,
+} from "./settings.ts";
 
 // ---------- host API subset (pi and omp are structurally compatible) ----------
 
@@ -102,8 +115,7 @@ interface PiApi {
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 // free-pi-cli 0.6.25 declares these for every catalog model (src/provider.ts):
 // CONTEXT_WINDOW = 200000, MAX_OUTPUT_TOKENS = 32768, reasoning: true.
-const CONTEXT_WINDOW = 200_000;
-const MAX_TOKENS = 32_768;
+// Both are overridable through settings (restart required).
 const MODEL_COMPAT = { supportsDeveloperRole: false };
 
 /** Last-resort list when the public catalog cannot be fetched at load time. */
@@ -117,39 +129,56 @@ const FALLBACK_MODELS: ProviderModel[] = [
   reasoning: true,
   input: ["text"],
   cost: ZERO_COST,
-  contextWindow: CONTEXT_WINDOW,
-  maxTokens: MAX_TOKENS,
+  contextWindow: 200_000,
+  maxTokens: 32_768,
   compat: MODEL_COMPAT,
 }));
 
-function toProviderModel(m: CatalogModel): ProviderModel {
+function toProviderModel(m: CatalogModel, settings: Settings): ProviderModel {
   return {
     id: m.id,
     name: (m.display_name || m.name.split(" · ")[0]?.trim() || m.id) + (m.free ? " (free)" : ""),
     reasoning: true,
     input: ["text"],
     cost: ZERO_COST,
-    contextWindow: CONTEXT_WINDOW,
-    maxTokens: MAX_TOKENS,
+    contextWindow: settings.models.contextWindow,
+    maxTokens: settings.models.maxTokens,
     compat: MODEL_COMPAT,
   };
 }
 
-function providerModels(catalog: Catalog | null): ProviderModel[] {
-  const available = (catalog?.models ?? []).filter((m) => !m.unavailable);
-  return available.length > 0 ? available.map(toProviderModel) : FALLBACK_MODELS;
+function visibleCatalogModels(catalog: Catalog | null, settings: Settings): CatalogModel[] {
+  return (catalog?.models ?? []).filter((m) =>
+    !m.unavailable && !settings.models.hidden.includes(m.id) && (!settings.models.freeOnly || m.free === true),
+  );
+}
+
+function providerModels(catalog: Catalog | null, settings: Settings): ProviderModel[] {
+  const available = visibleCatalogModels(catalog, settings);
+  if (available.length > 0) return available.map((m) => toProviderModel(m, settings));
+  // Every fallback model is in the free bucket, so models.freeOnly keeps them all.
+  return FALLBACK_MODELS
+    .filter((m) => !settings.models.hidden.includes(m.id))
+    .map((m) => ({ ...m, contextWindow: settings.models.contextWindow, maxTokens: settings.models.maxTokens }));
 }
 
 // ---------- process-wide server ----------
 
 let serverPromise: Promise<RunningServer> | null = null;
+let currentSettings: Settings | null = null;
+
+async function effectiveSettings(): Promise<Settings> {
+  currentSettings ??= await loadSettings();
+  return currentSettings;
+}
 
 function ensureServer(): Promise<RunningServer> {
   if (!serverPromise) {
-    serverPromise = startServer().then((running) => {
+    serverPromise = effectiveSettings().then((settings) => startServer(settings)).then((running) => {
       let cachedJwt = "";
       let getContext: () => string | undefined = () => undefined;
       running.ctx.gravityContext = (jwt: string) => {
+        if (!currentSettings?.ads.gravity) return undefined;
         if (jwt !== cachedJwt) {
           cachedJwt = jwt;
           getContext = startGravityPixel(jwt);
@@ -202,13 +231,14 @@ function renderQuota(view: QuotaView, fallbackHandle?: string): string {
 
 export default async function freepiPlugin(pi: PiApi): Promise<void> {
   const running = await ensureServer();
+  const settings = await effectiveSettings();
   await running.ctx.upstream.refreshCatalog();
 
   pi.registerProvider("freepi", {
     name: "Free Pi",
     baseUrl: running.url,
     api: "openai-completions",
-    models: providerModels(running.ctx.upstream.catalog),
+    models: providerModels(running.ctx.upstream.catalog, settings),
     oauth: {
       name: "Free Pi (GitHub)",
       async login(callbacks: OAuthCallbacks): Promise<OAuthCredentials> {
@@ -270,7 +300,8 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
   const status = async (ctx: CommandCtx): Promise<void> => {
     const token = await loadToken();
     const catalog = running.ctx.upstream.catalog;
-    const models = providerModels(catalog);
+    const active = await effectiveSettings();
+    const models = providerModels(catalog, active);
     const free = (catalog?.models ?? []).filter((m) => m.free && !m.unavailable).length;
     const lines = [`free-pi server: ${running.url}`, `Models: ${models.length} (${free} free)`];
     if (!token) {
@@ -290,9 +321,10 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
     ctx.ui.notify(lines.join("\n"), view.ok ? "info" : "warning");
   };
 
-  const modelList = (ctx: CommandCtx): void => {
-    const models = providerModels(running.ctx.upstream.catalog);
+  const modelList = async (ctx: CommandCtx): Promise<void> => {
+    const active = await effectiveSettings();
     const catalog = running.ctx.upstream.catalog;
+    const models = providerModels(catalog, active);
     const detail = models.slice(0, 40).map((m) => {
       const raw = catalog?.models.find((c) => c.id === m.id);
       return `${m.id}${raw && !raw.free ? ` (${raw.multiplier}x)` : raw?.free ? " (free)" : ""}`;
@@ -300,25 +332,133 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
     ctx.ui.notify(`free-pi models: ${models.length}\n${detail.join("\n")}`, "info");
   };
 
+  const applySettings = (next: Settings): void => {
+    currentSettings = next;
+    running.ctx.settings = next;
+    running.ctx.cache.configure(next.cache);
+  };
+
+  const configActions: CompletionItem[] = [
+    { value: "show", label: "show", description: "Print every setting and its effective value" },
+    { value: "get", label: "get", description: "Print one setting" },
+    { value: "set", label: "set", description: "Change one setting and persist it" },
+    { value: "unset", label: "unset", description: "Reset one setting to its default" },
+    { value: "reset", label: "reset", description: "Delete settings.json and restore defaults" },
+    { value: "path", label: "path", description: "Print the settings file path" },
+    { value: "help", label: "help", description: "Show config usage" },
+  ];
+
+  const configCompletions = (prefix: string): CompletionItem[] => {
+    const text = prefix.trim();
+    const act = /^(set|get|unset)\s+(\S*)$/i.exec(text);
+    if (act) {
+      const q = act[2].toLowerCase();
+      return SETTING_KEYS.filter((k) => k.path.startsWith(q)).map((k) => ({
+        value: `${act[1]} ${k.path}`,
+        label: k.path,
+        description: k.description,
+      }));
+    }
+    if (text.includes(" ")) return [];
+    return configActions.filter((a) => a.value.startsWith(text.toLowerCase()));
+  };
+
+  const config = async (args: string, ctx: CommandCtx): Promise<void> => {
+    const parts = args.trim().split(/\s+/).filter(Boolean);
+    const action = (parts[0] ?? "show").toLowerCase();
+    if (action === "show") {
+      ctx.ui.notify(formatSettings(await effectiveSettings()), "info");
+      return;
+    }
+    if (action === "path") {
+      ctx.ui.notify(SETTINGS_PATH, "info");
+      return;
+    }
+    if (action === "help") {
+      ctx.ui.notify(
+        [
+          "Usage: /freepi config [show|get|set|unset|reset|path|help]",
+          "  set <key> <value>   persist a value (live keys apply now)",
+          "  unset <key>         restore the default for one key",
+          "  reset               delete settings.json and reload defaults",
+          `Keys: ${SETTING_KEYS.map((k) => k.path).join(", ")}`,
+        ].join("\n"),
+        "info",
+      );
+      return;
+    }
+    if (action === "reset") {
+      const next = await resetSettings();
+      applySettings(next);
+      ctx.ui.notify("free-pi settings reset to defaults. Restart omp for port/baseUrl/model changes.", "info");
+      return;
+    }
+    if (action === "get") {
+      const key = findKey(parts[1] ?? "");
+      if (!key) {
+        ctx.ui.notify(`Unknown setting "${parts[1] ?? ""}". Run /freepi config help for keys.`, "error");
+        return;
+      }
+      ctx.ui.notify(`${key.path} = ${formatValue(key, await effectiveSettings())}`, "info");
+      return;
+    }
+    if (action === "set" || action === "unset") {
+      const key = findKey(parts[1] ?? "");
+      if (!key) {
+        ctx.ui.notify(`Unknown setting "${parts[1] ?? ""}". Run /freepi config help for keys.`, "error");
+        return;
+      }
+      const raw = action === "unset"
+        ? (Array.isArray(key.get(defaultSettings())) ? (key.get(defaultSettings()) as string[]).join(",") : String(key.get(defaultSettings())))
+        : parts.slice(2).join(" ");
+      if (action === "set" && !raw) {
+        ctx.ui.notify(`Usage: /freepi config set ${key.path} <value>`, "warning");
+        return;
+      }
+      const next = structuredClone(await effectiveSettings());
+      try {
+        setSetting(next, key.path, raw);
+      } catch (e) {
+        ctx.ui.notify(`free-pi config: ${e instanceof Error ? e.message : String(e)}`, "error");
+        return;
+      }
+      await saveSettings(next);
+      applySettings(next);
+      const note = key.restart ? " Restart omp to apply." : "";
+      ctx.ui.notify(`${key.path} = ${formatValue(key, next)}${note}`, "info");
+      return;
+    }
+    ctx.ui.notify(`Unknown config action "${action}". Run /freepi config help.`, "error");
+  };
+
   const subcommands: CompletionItem[] = [
     { value: "quota", label: "quota", description: "Full daily credit, usage, and refill report" },
     { value: "models", label: "models", description: "List free and paid models" },
+    { value: "config", label: "config", description: "Show or change plugin settings" },
+    { value: "settings", label: "settings", description: "Alias for /freepi config" },
     { value: "login", label: "login", description: "How to sign in" },
     { value: "server", label: "server", description: "Loopback server URL and cache stats" },
     { value: "help", label: "help", description: "List available subcommands" },
   ];
 
   pi.registerCommand("freepi", {
-    description: "free-pi status, quota, models, login, and server",
-    input: { hint: "<quota|models|login|server|help>" },
+    description: "free-pi status, quota, models, config, login, and server",
+    input: { hint: "<quota|models|config|settings|login|server|help>" },
     getArgumentCompletions(prefix: string): CompletionItem[] {
-      const p = prefix.trim().toLowerCase();
+      const text = prefix.trim();
+      const head = /^(config|settings)(?:\s+([\s\S]*))?$/i.exec(text);
+      if (head) return configCompletions(head[2] ?? "");
+      const p = text.toLowerCase();
       return subcommands.filter((c) => c.value.startsWith(p));
     },
     handler: async (args: string, ctx: CommandCtx) => {
-      const sub = args.trim().toLowerCase();
+      const trimmed = args.trim();
+      const sub = trimmed.toLowerCase();
       if (sub === "quota") return quota(ctx);
       if (sub === "models") return modelList(ctx);
+      if (sub === "config" || sub === "settings" || sub.startsWith("config ") || sub.startsWith("settings ")) {
+        return config(trimmed.split(/\s+/).slice(1).join(" "), ctx);
+      }
       if (sub === "login") {
         ctx.ui.notify("Run /login freepi (or `omp login freepi`) to sign in with GitHub.", "info");
         return;
@@ -329,7 +469,7 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
         return;
       }
       if (sub === "help") {
-        ctx.ui.notify(`Usage: /freepi [quota|models|login|server|help]\n${subcommands.map((c) => `  ${c.value.padEnd(8)} ${c.description}`).join("\n")}`, "info");
+        ctx.ui.notify(`Usage: /freepi [quota|models|config|settings|login|server|help]\n${subcommands.map((c) => `  ${c.value.padEnd(9)} ${c.description}`).join("\n")}`, "info");
         return;
       }
       await status(ctx);

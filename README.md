@@ -37,15 +37,48 @@ For `pi`, install the same directory as an extension package (its `package.json`
 ```
 /login freepi          # GitHub device code; prints the code and URL
 /model freepi/...      # pick a free-pi model
-/freepi                # quota: credits left, used, refill, streak
+/freepi                # status: server, models, login, handle/tier, quota line
+/freepi quota          # full quota: credits left, used, refill, streak
+/freepi-quota          # quota only
 /freepi models         # registered model list
-/freepi-quota          # alias for the quota view
+/freepi config         # show every setting
+/freepi settings       # same as /freepi config
 ```
 
 `omp login freepi` works outside a session. The plugin stores its own token copy in
 `~/.freepi-plugin/token` (mode 0600) for the quota command; it never touches the free-pi CLI credentials file.
 
 ## Configuration
+
+`/freepi config` and `/freepi settings` are the same command:
+
+```
+/freepi config                      # show all settings with effective values
+/freepi config get <key>
+/freepi config set <key> <value>    # persisted to ~/.freepi-plugin/settings.json
+/freepi config unset <key>          # back to its default
+/freepi config reset                # delete the file and reload defaults
+/freepi config path
+```
+
+Settings override environment defaults. `cache.*` and `ads.gravity` apply immediately;
+`baseUrl`, `port`, and `models.*` take effect on the next host start.
+
+|Key|Default|Meaning|
+|---|---|---|
+|`baseUrl`|`https://api.freepi.ai`|Upstream base URL|
+|`port`|`8473`|Preferred loopback port; probes upward|
+|`cache.enabled`|`true`|Exact-response cache|
+|`cache.ttlMs`|`3600000`|Cache entry lifetime|
+|`cache.maxEntries`|`300`|Cached response count cap|
+|`cache.maxBytes`|`33554432`|Cached response byte cap|
+|`ads.gravity`|`true`|Attach Gravity ad context when the SDK exists|
+|`models.freeOnly`|`false`|Expose only catalog models marked free|
+|`models.hidden`|empty|Comma-separated model ids to hide|
+|`models.contextWindow`|`200000`|Advertised context window|
+|`models.maxTokens`|`32768`|Advertised max output tokens|
+
+Environment variables below seed those defaults:
 
 |Variable|Default|Meaning|
 |---|---|---|

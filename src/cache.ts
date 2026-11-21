@@ -75,9 +75,9 @@ function emptyStream(): ReadableStream<Uint8Array> {
 
 export class ResponseCache {
   enabled: boolean;
-  private readonly ttlMs: number;
-  private readonly maxEntries: number;
-  private readonly maxBytes: number;
+  private ttlMs: number;
+  private maxEntries: number;
+  private maxBytes: number;
   private readonly now: () => number;
   private readonly entries = new Map<string, Entry>();
   private readonly inflight = new Map<string, Promise<CachedPayload | null>>();
@@ -94,6 +94,24 @@ export class ResponseCache {
     this.maxEntries = Number.isFinite(maxEntries) && maxEntries > 0 ? Math.floor(maxEntries) : 300;
     this.maxBytes = Number.isFinite(maxBytes) && maxBytes > 0 ? Math.floor(maxBytes) : 32 * 1024 * 1024;
     this.now = opts?.now ?? Date.now;
+  }
+
+  /** Apply new limits in place; existing entries are trimmed to fit. */
+  configure(opts: Partial<CacheOptions>): void {
+    if (opts.enabled !== undefined) this.enabled = opts.enabled;
+    if (opts.ttlMs !== undefined && Number.isFinite(opts.ttlMs) && opts.ttlMs > 0) this.ttlMs = opts.ttlMs;
+    if (opts.maxEntries !== undefined && Number.isFinite(opts.maxEntries) && opts.maxEntries > 0) {
+      this.maxEntries = Math.floor(opts.maxEntries);
+    }
+    if (opts.maxBytes !== undefined && Number.isFinite(opts.maxBytes) && opts.maxBytes > 0) {
+      this.maxBytes = Math.floor(opts.maxBytes);
+    }
+    this.evictExpired();
+    while (this.entries.size > this.maxEntries || this.bytes > this.maxBytes) {
+      const oldest = this.entries.keys().next();
+      if (oldest.done) break;
+      this.delete(oldest.value);
+    }
   }
 
   key(bodyText: string): string | null {
