@@ -71,3 +71,21 @@ by catalog, so there is no paid model that avoids the allowance.
 - omp's RPC still advertises `input: {"hint":"arguments"}` for extension commands and drops custom
   `input.hint`; command argument completion still works, because it comes from
   `getArgumentCompletions`.
+
+## 2026-11-21 — Settings layer
+
+`/freepi config` and `/freepi settings` are one handler. Values persist as JSON in
+`~/.freepi-plugin/settings.json` (`SETTINGS_PATH`), precedence defaults/env < file.
+
+Keys: `baseUrl`, `port`, `cache.enabled`, `cache.ttlMs`, `cache.maxEntries`, `cache.maxBytes`,
+`ads.gravity`, `models.freeOnly`, `models.hidden` (comma list), `models.contextWindow`,
+`models.maxTokens`. Actions: `show`, `get`, `set`, `unset`, `reset`, `path`, `help`.
+Completion completes actions and keys for `set|get|unset`.
+
+Live application: `cache.*` via `ResponseCache.configure` (mutable limits, trims entries) and
+`ads.gravity` via the gravity getter reading `currentSettings`. `baseUrl`, `port`, and
+`models.*` metadata are fixed at registration/server bind, so the command says "Restart omp".
+`/v1/models` filtering (`freeOnly`, `hidden`) does read live `ctx.settings`.
+
+Gotcha: plugin init loads settings once (`currentSettings`) before `startServer`, so the file
+must exist/parse before the first command; mutations clone, save, then `applySettings`.

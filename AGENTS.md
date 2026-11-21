@@ -39,5 +39,7 @@ omp plugin link ~/projects/freepi-plugin
   `~/.free-pi/agent/credentials.json`.
 - Every completion turn runs `/ads/next`, optional Gravity pixel, `/ads/impression`. Never bypass,
   spoof, or hide ad/metering traffic.
+- Settings live in `~/.freepi-plugin/settings.json`, edited by `/freepi config` (alias
+  `/freepi settings`). Cache and Gravity apply live; port/baseUrl/model presentation need a restart.
 - Server binds loopback only; port 8473 with upward probing.
 - Upstream errors pass through and are not cached; only spent-session errors retry (once).
