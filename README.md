@@ -64,6 +64,24 @@ For `pi`, install the same directory as an extension package (its `package.json`
   exactly as in `freepi-proxy`.
 - Errors pass through unchanged. Spent-session retries happen once, on a fresh session id.
 
+## Context and free/paid probes
+
+`scripts/probe-context.mjs` measures a model's real context window by sending
+fresh, metered, ad-attributed turns at increasing prompt sizes. It never asks
+for more than one output token.
+
+```sh
+node scripts/probe-context.mjs                                  # plan + catalog
+node scripts/probe-context.mjs --model deepseek-v4.1-flash --at 200000
+node scripts/probe-context.mjs --model deepseek-v4.1-flash --bisect 180000 300000
+node scripts/probe-context.mjs --all --at 210000 --budget 6000
+```
+
+Each request costs roughly `prompt_tokens * multiplier * 0.00222` credits.
+`--budget` stops before crossing the estimate. Results also land in
+`~/.freepi-plugin/context-probe.json`. `/freepi models` marks catalog models
+free or shows their usage multiplier.
+
 ## Tests
 
 ```sh
