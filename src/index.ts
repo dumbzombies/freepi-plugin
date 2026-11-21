@@ -71,9 +71,20 @@ interface ToolResult {
   details?: unknown;
 }
 
+interface CompletionItem {
+  value: string;
+  label: string;
+  description?: string;
+}
+
 interface PiApi {
   registerProvider(name: string, config: ProviderConfig): void;
-  registerCommand(name: string, options: { description?: string; handler: (args: string, ctx: CommandCtx) => unknown }): void;
+  registerCommand(name: string, options: {
+    description?: string;
+    input?: { hint?: string };
+    getArgumentCompletions?(prefix: string): CompletionItem[] | null | Promise<CompletionItem[] | null>;
+    handler: (args: string, ctx: CommandCtx) => unknown;
+  }): void;
   registerTool(tool: {
     name: string;
     label: string;
@@ -245,7 +256,7 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
     },
   });
 
-  const quota = async (args: string, ctx: CommandCtx): Promise<void> => {
+  const quota = async (ctx: CommandCtx): Promise<void> => {
     const token = await loadToken();
     if (!token) {
       ctx.ui.notify("free-pi: not logged in. Run /login freepi (or `omp login freepi`).", "warning");
@@ -255,34 +266,82 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
     ctx.ui.notify(renderQuota(view), view.ok ? "info" : "warning");
   };
 
+  /** One-screen account/plugin status. Quota detail lives in /freepi-quota. */
+  const status = async (ctx: CommandCtx): Promise<void> => {
+    const token = await loadToken();
+    const catalog = running.ctx.upstream.catalog;
+    const models = providerModels(catalog);
+    const free = (catalog?.models ?? []).filter((m) => m.free && !m.unavailable).length;
+    const lines = [`free-pi server: ${running.url}`, `Models: ${models.length} (${free} free)`];
+    if (!token) {
+      lines.push("Login: missing — run /login freepi or `omp login freepi`.");
+      ctx.ui.notify(lines.join("\n"), "warning");
+      return;
+    }
+    const view = await quotaView(running.ctx, token);
+    const head = ["Login: ok", view.handle ? `@${view.handle}` : null, view.tier].filter(Boolean).join(" · ");
+    lines.push(head);
+    if (view.ok) {
+      lines.push(`Quota: ${formatCredits(view.quota.remaining_credits_today)} / ${formatCredits(view.quota.allowance_credits)} credits left (${view.quota.remaining_pct ?? "?"}%) · refills in ${formatDuration(view.quota.refill_in_ms)}`);
+    } else {
+      lines.push(`Quota: unavailable (${view.error ?? "no stats"})`);
+    }
+    lines.push("Use /freepi quota for full usage, /freepi models for the model list.");
+    ctx.ui.notify(lines.join("\n"), view.ok ? "info" : "warning");
+  };
+
+  const modelList = (ctx: CommandCtx): void => {
+    const models = providerModels(running.ctx.upstream.catalog);
+    const catalog = running.ctx.upstream.catalog;
+    const detail = models.slice(0, 40).map((m) => {
+      const raw = catalog?.models.find((c) => c.id === m.id);
+      return `${m.id}${raw && !raw.free ? ` (${raw.multiplier}x)` : raw?.free ? " (free)" : ""}`;
+    });
+    ctx.ui.notify(`free-pi models: ${models.length}\n${detail.join("\n")}`, "info");
+  };
+
+  const subcommands: CompletionItem[] = [
+    { value: "quota", label: "quota", description: "Full daily credit, usage, and refill report" },
+    { value: "models", label: "models", description: "List free and paid models" },
+    { value: "login", label: "login", description: "How to sign in" },
+    { value: "server", label: "server", description: "Loopback server URL and cache stats" },
+    { value: "help", label: "help", description: "List available subcommands" },
+  ];
+
   pi.registerCommand("freepi", {
-    description: "Show free-pi quota, account, and plugin status",
+    description: "free-pi status, quota, models, login, and server",
+    input: { hint: "<quota|models|login|server|help>" },
+    getArgumentCompletions(prefix: string): CompletionItem[] {
+      const p = prefix.trim().toLowerCase();
+      return subcommands.filter((c) => c.value.startsWith(p));
+    },
     handler: async (args: string, ctx: CommandCtx) => {
       const sub = args.trim().toLowerCase();
-      if (sub === "models") {
-        const models = providerModels(running.ctx.upstream.catalog);
-        const catalog = running.ctx.upstream.catalog;
-        const detail = models.slice(0, 40).map((m) => {
-          const raw = catalog?.models.find((c) => c.id === m.id);
-          return `${m.id}${raw && !raw.free ? ` (${raw.multiplier}x)` : raw?.free ? " (free)" : ""}`;
-        });
-        ctx.ui.notify(`free-pi models: ${models.length}\n${detail.join("\n")}`, "info");
-        return;
-      }
+      if (sub === "quota") return quota(ctx);
+      if (sub === "models") return modelList(ctx);
       if (sub === "login") {
         ctx.ui.notify("Run /login freepi (or `omp login freepi`) to sign in with GitHub.", "info");
         return;
       }
       if (sub === "server") {
-        ctx.ui.notify(`free-pi server: ${running.url}\ngravity ads: pending SDK\nlogin token file: managed by plugin`, "info");
+        const cache = running.ctx.cache.stats();
+        ctx.ui.notify(`free-pi server: ${running.url}\nCache: ${cache.entries} entries, ${cache.hits} hits / ${cache.misses} misses\nLogin token: ${await loadToken() ? "present" : "missing"}`, "info");
         return;
       }
-      await quota(args, ctx);
+      if (sub === "help") {
+        ctx.ui.notify(`Usage: /freepi [quota|models|login|server|help]\n${subcommands.map((c) => `  ${c.value.padEnd(8)} ${c.description}`).join("\n")}`, "info");
+        return;
+      }
+      await status(ctx);
     },
   });
 
   pi.registerCommand("freepi-quota", {
     description: "Show the free-pi daily credit quota",
+    input: { hint: "" },
+    getArgumentCompletions(): CompletionItem[] {
+      return [];
+    },
     handler: quota,
   });
 
