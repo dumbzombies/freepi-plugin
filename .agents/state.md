@@ -17,12 +17,15 @@ session rotation, and response caching.
   `getArgumentCompletions`.
 - `/freepi config` = `/freepi settings`: show/get/set/unset/reset/path/help over
   `~/.freepi-plugin/settings.json` (baseUrl, port, cache limits, ads.gravity, model filters and
-  metadata). Cache and Gravity apply live; port/baseUrl/model presentation apply on restart.
+  metadata). No-arg form is an interactive menu. Cache and Gravity apply live; port/baseUrl/model
+  presentation apply on restart.
+- Premium-only (403) models are hidden by default via `src/visibility.ts`; `models.showPremium` exposes
+  them. Defaults expose 10 models: 4 free + 6 allowance-charged.
 - `scripts/probe-context.mjs`: `deepseek-v4.1-flash` accepts ~213,363 prompt tokens before
   `context_too_long`.
 - `scripts/probe-billing.mjs`: all 27 models classified — 4 free, 6 quota-charged, 17 premium-only.
-- Tests: `npm test` → 7 pass, 0 fail (server, token, settings round-trip, cache reconfigure, model filter).
-- Commits: `81dc32b`, `ac6b261`, `70f929b`, `77fd98e`, `2961356`, `3c23b8b`, `2cffefc`. Worktree clean.
+- Tests: `npm test` → 8 pass, 0 fail (server, token, settings round-trip, cache reconfigure, model filters, premium visibility).
+- Commits: `81dc32b`, `ac6b261`, `70f929b`, `77fd98e`, `2961356`, `3c23b8b`, `2cffefc`, `c576cf7`, `d39db09`. Worktree clean.
 - Plugin linked into omp with `omp plugin link ~/projects/freepi-plugin`.
 
 ## Blockers

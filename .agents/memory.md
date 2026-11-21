@@ -89,3 +89,17 @@ Live application: `cache.*` via `ResponseCache.configure` (mutable limits, trims
 
 Gotcha: plugin init loads settings once (`currentSettings`) before `startServer`, so the file
 must exist/parse before the first command; mutations clone, save, then `applySettings`.
+
+## 2026-11-21 — Premium model visibility and interactive settings
+
+Premium-gated models are hidden by default (`models.showPremium=false`). `src/visibility.ts` owns the
+rule: hide `!free` models when `multiplier >= 1`, plus observed sub-1x outliers in
+`PREMIUM_ONLY_IDS` (`mimo-v2.6-flash` and the other 16 probed 403 models). Provider registration and
+`/v1/models` both call `isModelVisible`, so defaults expose exactly 10 models: 4 free + 6 that spend
+the daily allowance. Set `models.showPremium true` to expose the 403 bucket.
+
+`/freepi config` and `/freepi settings` with no action open an interactive menu built directly on
+`ctx.ui.custom` (no pi-tui import, preserving zero dependencies): type to filter, arrows navigate,
+Enter toggles booleans or opens `ctx.ui.editor` for numbers/strings/lists, Esc closes. Hosts without
+`custom` fall back to the text listing. Explicit `show|get|set|unset|reset|path|help` actions remain
+for scripting.
