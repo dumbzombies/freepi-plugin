@@ -13,6 +13,10 @@ Unofficial. Not affiliated with free-pi / freepi.ai. It speaks the same backend 
 - check today's credits with `/freepi` or the `freepi_quota` tool
 - keep the ad cycle, session rotation, force-upgrade gate, and exact-response cache intact
 
+Model metadata mirrors `free-pi-cli` 0.6.25: every catalog model is registered with a 200,000-token
+context window, 32,768 max output tokens, thinking enabled, and `supportsDeveloperRole: false`.
+The plugin does not invent per-model limits from other catalogs.
+
 There is no dashboard, MCP server, or Anthropic bridge. The plugin starts an in-process loopback server
 (`127.0.0.1`, port 8473+) that implements `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/quota`,
 and `GET /healthz`; the provider points at it.

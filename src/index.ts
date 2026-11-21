@@ -50,6 +50,7 @@ interface ProviderModel {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow: number;
   maxTokens: number;
+  compat?: { supportsDeveloperRole?: boolean };
 }
 
 interface ProviderConfig {
@@ -88,8 +89,11 @@ interface PiApi {
 // ---------- constants ----------
 
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-const CONTEXT_WINDOW = 128_000;
-const MAX_TOKENS = 8_192;
+// free-pi-cli 0.6.25 declares these for every catalog model (src/provider.ts):
+// CONTEXT_WINDOW = 200000, MAX_OUTPUT_TOKENS = 32768, reasoning: true.
+const CONTEXT_WINDOW = 200_000;
+const MAX_TOKENS = 32_768;
+const MODEL_COMPAT = { supportsDeveloperRole: false };
 
 /** Last-resort list when the public catalog cannot be fetched at load time. */
 const FALLBACK_MODELS: ProviderModel[] = [
@@ -99,22 +103,24 @@ const FALLBACK_MODELS: ProviderModel[] = [
   { id: "particle", name: "Particle" },
 ].map((m) => ({
   ...m,
-  reasoning: false,
+  reasoning: true,
   input: ["text"],
   cost: ZERO_COST,
   contextWindow: CONTEXT_WINDOW,
   maxTokens: MAX_TOKENS,
+  compat: MODEL_COMPAT,
 }));
 
 function toProviderModel(m: CatalogModel): ProviderModel {
   return {
     id: m.id,
     name: (m.display_name || m.name.split(" · ")[0]?.trim() || m.id) + (m.free ? " (free)" : ""),
-    reasoning: false,
+    reasoning: true,
     input: ["text"],
     cost: ZERO_COST,
     contextWindow: CONTEXT_WINDOW,
     maxTokens: MAX_TOKENS,
+    compat: MODEL_COMPAT,
   };
 }
 
