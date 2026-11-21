@@ -79,8 +79,32 @@ node scripts/probe-context.mjs --all --at 210000 --budget 6000
 
 Each request costs roughly `prompt_tokens * multiplier * 0.00222` credits.
 `--budget` stops before crossing the estimate. Results also land in
-`~/.freepi-plugin/context-probe.json`. `/freepi models` marks catalog models
-free or shows their usage multiplier.
+`~/.freepi-plugin/context-probe.json`.
+
+`scripts/probe-billing.mjs` sends one small ad-attributed turn per model and
+polls `/me/stats` for the credit delta:
+
+```sh
+node scripts/probe-billing.mjs --plan
+node scripts/probe-billing.mjs --model gpt-oss-20b --tokens 1500
+node scripts/probe-billing.mjs --models hy4-flash,ling-3.0-flash --tokens 1500
+node scripts/probe-billing.mjs --all --tokens 1500 --budget 3000
+```
+
+It reuses one upstream session; if the account already has 4 live CLI
+sessions, free the slots with `POST /session/reset` or wait for leases to
+expire. Results land in `~/.freepi-plugin/billing-probe.json`.
+
+Observed on 2026-11-21:
+
+- no quota hit (catalog `free: true`): `particle`, `deepseek-v4.1-flash`,
+  `glm-5.3-flash`, `deepseek-v4-flash`
+- charged against the daily allowance: `gpt-oss-20b`, `hy4-flash`,
+  `ling-3.0-flash`, `ling-3.1-flash`, `qwen3.7-flash`, `solar-mini-4`
+- rejected with `model_requires_credits` without purchased premium credits:
+  every other catalog model (all 1.6x and above, plus `mimo-v2.6-flash`)
+
+`/freepi models` marks catalog models free or shows their usage multiplier.
 
 ## Tests
 
