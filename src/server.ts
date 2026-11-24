@@ -26,12 +26,18 @@ export function createCtx(settings: Settings = defaultSettings()): Ctx {
   };
 }
 
+/** Bearer token from the request. Hosts that configure a static apiKey (e.g.
+ * opencode's provider block) send a placeholder string; only JWT-shaped values
+ * are treated as credentials, so the stored token file stays authoritative. */
 function bearer(req: IncomingMessage): string | null {
   const auth = req.headers.authorization;
-  if (typeof auth === "string" && /^Bearer\s+/i.test(auth)) return auth.replace(/^Bearer\s+/i, "").trim() || null;
-  const key = req.headers["x-api-key"];
-  if (typeof key === "string" && key.trim()) return key.trim();
-  return null;
+  const raw = typeof auth === "string" && /^Bearer\s+/i.test(auth)
+    ? auth.replace(/^Bearer\s+/i, "").trim()
+    : typeof req.headers["x-api-key"] === "string"
+      ? (req.headers["x-api-key"] as string).trim()
+      : "";
+  if (!raw) return null;
+  return raw.split(".").length === 3 ? raw : null;
 }
 
 async function readBody(req: IncomingMessage): Promise<string | null> {
@@ -64,7 +70,10 @@ async function pipe(res: ServerResponse, stream: ReadableStream<Uint8Array>, con
   res.once("close", onClose);
   try {
     const node = Readable.fromWeb(stream as unknown as NodeReadableStream<Uint8Array>);
-    node.on("error", () => controller.abort());
+    node.on("error", () => {
+      controller.abort();
+      res.destroy();
+    });
     node.pipe(res);
   } catch {
     controller.abort();

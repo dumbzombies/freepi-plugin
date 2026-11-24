@@ -120,6 +120,32 @@ export interface LoginCallbacks {
   signal?: AbortSignal;
 }
 
+/** Submit consent for a started flow and poll until free-pi returns a token. */
+export async function awaitDeviceToken(
+  flow: DeviceFlow,
+  opts: { onProgress?(message: string): void; signal?: AbortSignal } = {},
+): Promise<string> {
+  await submitConsent(flow.session_id);
+  const interval = Math.max(Number(flow.interval) || 5, 3) * 1000;
+  const deadline = Date.now() + (Number(flow.expires_in) || 900) * 1000;
+  for (;;) {
+    if (opts.signal?.aborted) throw new Error("login cancelled");
+    if (Date.now() > deadline) throw new Error("device code expired");
+    let result: string | "waiting" | "slowdown";
+    try {
+      result = await pollOnce(flow.session_id);
+    } catch (err) {
+      // tolerate transient network errors like the CLI does
+      opts.onProgress?.(err instanceof Error ? err.message : String(err));
+      await sleep(Math.max(interval, 5_000));
+      continue;
+    }
+    if (typeof result === "string" && result !== "waiting" && result !== "slowdown") return result;
+    if (result === "slowdown") opts.onProgress?.("GitHub says slow down; retrying in 10s");
+    await sleep(result === "slowdown" ? 10_000 : interval);
+  }
+}
+
 /** Run the CLI's device flow to a token. Reports the code once, then polls. */
 export async function deviceLogin(callbacks: LoginCallbacks): Promise<string> {
   const flow = await startDeviceFlow();
@@ -129,27 +155,7 @@ export async function deviceLogin(callbacks: LoginCallbacks): Promise<string> {
     intervalSeconds: flow.interval,
     expiresInSeconds: flow.expires_in,
   });
-  await submitConsent(flow.session_id);
-
-  const interval = Math.max(Number(flow.interval) || 5, 3) * 1000;
-  const deadline = Date.now() + (Number(flow.expires_in) || 900) * 1000;
-  for (;;) {
-    if (callbacks.signal?.aborted) throw new Error("login cancelled");
-    if (Date.now() > deadline) throw new Error("device code expired");
-    let result: string | "waiting" | "slowdown";
-    try {
-      result = await pollOnce(flow.session_id);
-    } catch (err) {
-      // tolerate transient network errors like the CLI does
-      callbacks.onProgress?.(err instanceof Error ? err.message : String(err));
-      await sleep(Math.max(interval, 5_000));
-      continue;
-    }
-    if (typeof result === "string" && result !== "waiting" && result !== "slowdown") {
-      await saveToken(result);
-      return result;
-    }
-    if (result === "slowdown") callbacks.onProgress?.("GitHub says slow down; retrying in 10s");
-    await sleep(result === "slowdown" ? 10_000 : interval);
-  }
+  const token = await awaitDeviceToken(flow, { onProgress: callbacks.onProgress, signal: callbacks.signal });
+  await saveToken(token);
+  return token;
 }

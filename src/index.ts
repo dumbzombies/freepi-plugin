@@ -3,12 +3,12 @@
 // quota, and every completion goes through an in-process OpenAI-compatible
 // server that preserves free-pi's ad cycle, session rotation and caching.
 
-import { startServer, type RunningServer } from "./server.ts";
 import { deviceLogin, loadToken, tokenExpiry } from "./token.ts";
-import { quotaView, type QuotaView } from "./state.ts";
-import { startGravityPixel } from "./gravity.ts";
-import type { Catalog, CatalogModel } from "./upstream.ts";
-import { isModelVisible } from "./visibility.ts";
+import { quotaView } from "./state.ts";
+import { formatCredits, formatDuration, renderQuota } from "./format.ts";
+import { applySettings, effectiveSettings, ensureServer } from "./runtime.ts";
+import type { Catalog } from "./upstream.ts";
+import { providerModels } from "./models.ts";
 import {
   SETTINGS_PATH,
   SETTING_KEYS,
@@ -16,7 +16,6 @@ import {
   findKey,
   formatSettings,
   formatValue,
-  loadSettings,
   resetSettings,
   saveSettings,
   setSetting,
@@ -130,111 +129,17 @@ const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 // Both are overridable through settings (restart required).
 const MODEL_COMPAT = { supportsDeveloperRole: false };
 
-/** Last-resort list when the public catalog cannot be fetched at load time. */
-const FALLBACK_MODELS: ProviderModel[] = [
-  { id: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash" },
-  { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
-  { id: "glm-5.3-flash", name: "GLM 5.3 Flash" },
-  { id: "particle", name: "Particle" },
-].map((m) => ({
-  ...m,
-  reasoning: true,
-  input: ["text"],
-  cost: ZERO_COST,
-  contextWindow: 200_000,
-  maxTokens: 32_768,
-  compat: MODEL_COMPAT,
-}));
-
-function toProviderModel(m: CatalogModel, settings: Settings): ProviderModel {
-  return {
+function hostModels(catalog: Catalog | null, settings: Settings): ProviderModel[] {
+  return providerModels(catalog, settings).map((m): ProviderModel => ({
     id: m.id,
-    name: (m.display_name || m.name.split(" · ")[0]?.trim() || m.id) + (m.free ? " (free)" : ""),
+    name: m.name,
     reasoning: true,
     input: ["text"],
     cost: ZERO_COST,
-    contextWindow: settings.models.contextWindow,
-    maxTokens: settings.models.maxTokens,
+    contextWindow: m.contextWindow,
+    maxTokens: m.maxTokens,
     compat: MODEL_COMPAT,
-  };
-}
-
-function visibleCatalogModels(catalog: Catalog | null, settings: Settings): CatalogModel[] {
-  return (catalog?.models ?? []).filter((m) => isModelVisible(m, settings));
-}
-
-function providerModels(catalog: Catalog | null, settings: Settings): ProviderModel[] {
-  const available = visibleCatalogModels(catalog, settings);
-  if (available.length > 0) return available.map((m) => toProviderModel(m, settings));
-  // Every fallback model is in the free bucket, so models.freeOnly keeps them all.
-  return FALLBACK_MODELS
-    .filter((m) => !settings.models.hidden.includes(m.id))
-    .map((m) => ({ ...m, contextWindow: settings.models.contextWindow, maxTokens: settings.models.maxTokens }));
-}
-
-// ---------- process-wide server ----------
-
-let serverPromise: Promise<RunningServer> | null = null;
-let currentSettings: Settings | null = null;
-
-async function effectiveSettings(): Promise<Settings> {
-  currentSettings ??= await loadSettings();
-  return currentSettings;
-}
-
-function ensureServer(): Promise<RunningServer> {
-  if (!serverPromise) {
-    serverPromise = effectiveSettings().then((settings) => startServer(settings)).then((running) => {
-      let cachedJwt = "";
-      let getContext: () => string | undefined = () => undefined;
-      running.ctx.gravityContext = (jwt: string) => {
-        if (!currentSettings?.ads.gravity) return undefined;
-        if (jwt !== cachedJwt) {
-          cachedJwt = jwt;
-          getContext = startGravityPixel(jwt);
-        }
-        return getContext();
-      };
-      return running;
-    });
-  }
-  return serverPromise;
-}
-
-// ---------- quota rendering ----------
-
-function formatCredits(n: number | null): string {
-  if (n == null) return "?";
-  return Number.isInteger(n) ? String(n) : n.toFixed(1);
-}
-
-function formatDuration(ms: number | null): string {
-  if (ms == null) return "unknown";
-  const total = Math.max(0, Math.round(ms / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m`;
-  return `${total}s`;
-}
-
-function renderQuota(view: QuotaView, fallbackHandle?: string): string {
-  const handle = view.handle ?? fallbackHandle;
-  const head = ["free-pi", handle ? `@${handle}` : null, view.tier].filter(Boolean).join(" · ");
-  if (!view.ok) {
-    return `${head}\nQuota unavailable: ${view.error ?? "no stats returned"}. Check your connection and try /freepi again.`;
-  }
-  const q = view.quota;
-  const lines = [
-    head,
-    `Credits: ${formatCredits(q.remaining_credits_today)} / ${formatCredits(q.allowance_credits)} left (${q.remaining_pct ?? "?"}%)`,
-    `Used today: ${formatCredits(q.used_credits_today)} credits · $${q.spent_usd_today ?? "?"} of $${q.cap_usd_today ?? "?"}`,
-    `Requests today: ${view.usage.requests_today ?? "?"} · tokens ${view.usage.prompt_tokens_today ?? "?"} in / ${view.usage.completion_tokens_today ?? "?"} out`,
-    `Refills in ${formatDuration(q.refill_in_ms)}${q.refill_at ? ` (${q.refill_at})` : ""}`,
-  ];
-  if (view.notice) lines.push(`Notice: ${view.notice}`);
-  if (view.usage.streak_days != null) lines.push(`Streak: ${view.usage.streak_days} day(s)`);
-  return lines.join("\n");
+  }));
 }
 
 // ---------- extension ----------
@@ -248,7 +153,7 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
     name: "Free Pi",
     baseUrl: running.url,
     api: "openai-completions",
-    models: providerModels(running.ctx.upstream.catalog, settings),
+    models: hostModels(running.ctx.upstream.catalog, settings),
     oauth: {
       name: "Free Pi (GitHub)",
       async login(callbacks: OAuthCallbacks): Promise<OAuthCredentials> {
@@ -311,7 +216,7 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
     const token = await loadToken();
     const catalog = running.ctx.upstream.catalog;
     const active = await effectiveSettings();
-    const models = providerModels(catalog, active);
+    const models = hostModels(catalog, active);
     const free = (catalog?.models ?? []).filter((m) => m.free && !m.unavailable).length;
     const lines = [`free-pi server: ${running.url}`, `Models: ${models.length} (${free} free)`];
     if (!token) {
@@ -334,18 +239,12 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
   const modelList = async (ctx: CommandCtx): Promise<void> => {
     const active = await effectiveSettings();
     const catalog = running.ctx.upstream.catalog;
-    const models = providerModels(catalog, active);
+    const models = hostModels(catalog, active);
     const detail = models.slice(0, 40).map((m) => {
       const raw = catalog?.models.find((c) => c.id === m.id);
       return `${m.id}${raw && !raw.free ? ` (${raw.multiplier}x)` : raw?.free ? " (free)" : ""}`;
     });
     ctx.ui.notify(`free-pi models: ${models.length}\n${detail.join("\n")}`, "info");
-  };
-
-  const applySettings = (next: Settings): void => {
-    currentSettings = next;
-    running.ctx.settings = next;
-    running.ctx.cache.configure(next.cache);
   };
 
   const configActions: CompletionItem[] = [

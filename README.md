@@ -23,14 +23,60 @@ and `GET /healthz`; the provider points at it.
 
 ## Install
 
+Zero dependencies, no build step. Requires Node ≥ 22.19 (for TypeScript type stripping).
+
+### pi
+
 ```sh
-# from a checkout
-omp plugin link ~/projects/freepi-plugin        # omp
-# or add the directory to config.yml: extensions: [~/projects/freepi-plugin]
+pi install git:github.com/dumbzombies/freepi-plugin    # or ./path/to/freepi-plugin
+pi list                                               # confirm it is registered
 ```
 
-For `pi`, install the same directory as an extension package (its `package.json` carries both
-`omp.extensions` and `pi.extensions`). Restart the agent after linking.
+### omp
+
+```sh
+omp plugin link ./freepi-plugin          # from a checkout
+omp plugin install freepi-plugin         # or from the marketplace entry
+omp plugin doctor                        # expect plugin:freepi-plugin: 0 errors
+```
+
+### opencode
+
+opencode's plugin hooks are not invoked by the current build, so this host uses a static provider
+block plus a long-running loopback server:
+
+```sh
+# 1. provider block (regenerate after a free-pi catalog change)
+node scripts/opencode-provider.mjs > /tmp/freepi-provider.json
+#    paste the object into ~/.config/opencode/opencode.jsonc under provider.freepi
+
+# 2. keep the loopback server up
+node scripts/serve.mjs                    # foreground
+# or as a runit service:
+mkdir -p "$PREFIX/var/service/freepi-loopback"
+printf '#!/data/data/com.termux/files/usr/bin/sh\ncd %s || exit 1\nexec node scripts/serve.mjs 2>&1\n' \
+  "$PWD" > "$PREFIX/var/service/freepi-loopback/run"
+chmod +x "$PREFIX/var/service/freepi-loopback/run"
+sv-enable freepi-loopback && sv status freepi-loopback
+```
+
+Then `opencode models` lists `freepi/<model>`, and `/freepi-login` / `/freepi-quota` come from
+`~/.config/opencode/command/freepi-{login,quota}.md`:
+
+```md
+---
+description: Show the Free Pi quota, usage, and refill time
+---
+
+!`node "$HOME/projects/freepi-plugin/scripts/quota.mjs"`
+```
+
+Restart the agent after linking.
+
+### Login
+
+`/login freepi` (pi/omp) or `node scripts/login.mjs` (any host) runs the GitHub device flow and
+writes `~/.freepi-plugin/token`; all three hosts share that file.
 
 ## Use
 

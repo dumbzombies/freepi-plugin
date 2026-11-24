@@ -108,3 +108,41 @@ for scripting.
 
 The separate `/freepi-quota` command is gone. Quota lives only under `/freepi quota`; the
 `freepi_quota` tool remains for the model.
+
+## 2026-11-24 — Stream-error hang fix (F-1/F-3)
+
+`pipe()` in `src/server.ts` attached `node.on("error", () => controller.abort())` and nothing else,
+so when the upstream response socket died after headers were sent, the client response was never
+terminated: a hung agent turn with no error. Fix: the handler now also calls `res.destroy()`.
+`test/server-stream.test.mjs` reproduces it (mock upstream writes one SSE event then destroys the
+socket) and hangs at 4 s without the fix.
+
+Gotcha: the mock upstream must be created inside the test body and `FREEPI_BASE_URL` must be set
+before importing `src/config.ts` (it reads env at module load). A top-level upstream server makes
+node:test report "Promise resolution is still pending".
+
+## 2026-11-24 — Placeholder apiKey means "use the token file"
+
+opencode's provider config requires a non-empty `apiKey`, so it sends `Bearer freepi`. `bearer()`
+now only accepts JWT-shaped credentials (three dot-separated parts) and otherwise falls back to
+`loadToken()`; a placeholder never reaches upstream. Verified in `test/server-auth.test.mjs`.
+
+## 2026-11-24 — opencode: hooks never fire on this build
+
+This opencode (2.3.2, Termux native) validates a plugin's default export as `{id, setup|effect}`,
+logs `failed to load plugin` if only `server()` is exported, and — once it loads — never invokes
+`server()`, `config`, `auth`, or `tool` hooks. `mistral-vibe.ts` documents the same constraint.
+Consequences and the adopted shape:
+
+- The loopback server runs as a **runit service**: `$PREFIX/var/service/freepi-loopback/run` →
+  `node scripts/serve.mjs`. Without it every `opencode run` fails `ECONNREFUSED` in a retry loop.
+- The provider block is **static** in `opencode.jsonc`; regenerate with
+  `node scripts/opencode-provider.mjs` after catalog changes (opencode never asks the server).
+- Login and quota are **commands** (`/freepi-login`, `/freepi-quota`) backed by the CLI scripts,
+  because there is no hook to register tools or oauth through.
+- Do not rely on `opencode service restart` to start the plugin server: the module is evaluated in
+  short-lived CLI processes, so nothing survives to serve requests.
+
+Gotcha: writing the provider block into `opencode.jsonc` by hand breaks the document easily — the
+mistral-vibe object's closing brace is easy to swallow. Validate after editing (parse with comments
+stripped) before running opencode, or all providers disappear from `opencode models`.
