@@ -507,7 +507,18 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
       }
       if (sub === "server") {
         const cache = running.ctx.cache.stats();
-        ctx.ui.notify(`free-pi server: ${running.url}\nCache: ${cache.entries} entries, ${cache.hits} hits / ${cache.misses} misses\nLogin token: ${await loadToken() ? "present" : "missing"}`, "info");
+        const prompt = running.ctx.promptCache.stats();
+        const pct = (n: number) => `${Math.round(n * 1000) / 10}%`;
+        ctx.ui.notify(
+          `free-pi server: ${running.url}\n` +
+            `Response cache: ${cache.entries} entries (${Math.round(cache.bytes / 1024)} KiB), ` +
+            `${cache.hits} hits / ${cache.misses} misses (${pct(cache.hitRate)}), ` +
+            `${Math.round(cache.savedBytes / 1024)} KiB served locally\n` +
+            `Upstream prompt cache: ${pct(prompt.hitRate)} of ${prompt.promptTokens} prompt tokens ` +
+            `(${prompt.requests} turns)\n` +
+            `Login token: ${await loadToken() ? "present" : "missing"}`,
+          "info",
+        );
         return;
       }
       if (sub === "help") {

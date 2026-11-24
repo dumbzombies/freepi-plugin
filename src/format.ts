@@ -31,6 +31,14 @@ export function renderQuota(view: QuotaView, fallbackHandle?: string): string {
     `Requests today: ${view.usage.requests_today ?? "?"} · tokens ${view.usage.prompt_tokens_today ?? "?"} in / ${view.usage.completion_tokens_today ?? "?"} out`,
     `Refills in ${formatDuration(q.refill_in_ms)}${q.refill_at ? ` (${q.refill_at})` : ""}`,
   ];
+  if (view.promptCache.requests > 0) {
+    const pct = Math.round(view.promptCache.hitRate * 1000) / 10;
+    lines.push(`Prompt cache: ${pct}% of ${view.promptCache.promptTokens} tokens reused upstream`);
+  }
+  if (view.cache.hits > 0) {
+    const pct = Math.round(view.cache.hitRate * 1000) / 10;
+    lines.push(`Response cache: ${view.cache.hits} hits / ${view.cache.misses} misses (${pct}%)`);
+  }
   if (view.notice) lines.push(`Notice: ${view.notice}`);
   if (view.usage.streak_days != null) lines.push(`Streak: ${view.usage.streak_days} day(s)`);
   return lines.join("\n");

@@ -7,6 +7,7 @@ import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { PORT_ATTEMPTS } from "./config.ts";
 import { ResponseCache } from "./cache.ts";
+import { PromptCacheMeter } from "./telemetry.ts";
 import { completeWithSessionRetry, createState, quotaView, type Ctx } from "./state.ts";
 import { loadToken } from "./token.ts";
 import { Upstream } from "./upstream.ts";
@@ -23,6 +24,7 @@ export function createCtx(settings: Settings = defaultSettings()): Ctx {
     upstream: new Upstream(settings.baseUrl),
     state: { sessionId: crypto.randomUUID(), startedAt: Date.now() },
     cache: new ResponseCache(settings.cache),
+    promptCache: new PromptCacheMeter(),
   };
 }
 
@@ -118,7 +120,9 @@ async function completions(req: IncomingMessage, res: ServerResponse, ctx: Ctx):
   let run;
   try {
     run = await ctx.cache.run(
-      cacheKey ?? crypto.randomUUID(),
+      // Only mint a throwaway key when the body is uncacheable; the cache skips
+      // storage for it, and a UUID per request would be wasted work.
+      cacheKey ?? "",
       async () => {
         const out = await completeWithSessionRetry(ctx, jwt, raw, controller.signal);
         return {
@@ -128,7 +132,11 @@ async function completions(req: IncomingMessage, res: ServerResponse, ctx: Ctx):
           cacheable: out.upstream.ok,
         };
       },
-      { store: cacheKey !== null },
+      {
+        store: cacheKey !== null,
+        // Every completed turn feeds the prompt-cache meter, hit or miss.
+        onPayload: (payload) => ctx.promptCache.record(payload.body),
+      },
     );
   } catch (e) {
     json(res, 502, {
@@ -141,10 +149,12 @@ async function completions(req: IncomingMessage, res: ServerResponse, ctx: Ctx):
     res.writeHead(run.payload.status, {
       "content-type": run.payload.ctype,
       "cache-control": "no-cache",
-      "x-freepi-cache": "hit",
+      "x-freepi-cache": `hit-${run.layer}`,
       "content-length": run.payload.body.byteLength,
     });
-    res.end(Buffer.from(run.payload.body));
+    // Zero-copy view: the payload is already a Buffer-backed Uint8Array.
+    const { buffer, byteOffset, byteLength } = run.payload.body;
+    res.end(Buffer.from(buffer, byteOffset, byteLength));
     return;
   }
 
@@ -163,7 +173,12 @@ export function createHandler(ctx: Ctx) {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     try {
       if (req.method === "GET" && url.pathname === "/healthz") {
-        json(res, 200, { ok: true, uptime_ms: Date.now() - ctx.state.startedAt });
+        json(res, 200, {
+          ok: true,
+          uptime_ms: Date.now() - ctx.state.startedAt,
+          cache: ctx.cache.stats(),
+          promptCache: ctx.promptCache.stats(),
+        });
         return;
       }
       if (req.method === "GET" && url.pathname === "/v1/models") {

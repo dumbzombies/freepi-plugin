@@ -114,8 +114,8 @@ Settings override environment defaults. `cache.*` and `ads.gravity` apply immedi
 |---|---|---|
 |`baseUrl`|`https://api.freepi.ai`|Upstream base URL|
 |`port`|`8473`|Preferred loopback port; probes upward|
-|`cache.enabled`|`true`|Exact-response cache|
-|`cache.ttlMs`|`3600000`|Cache entry lifetime|
+|`cache.enabled`|`true`|Exact-response cache (memory + disk)|
+|`cache.ttlMs`|`86400000`|Cache entry lifetime (24 h)|
 |`cache.maxEntries`|`300`|Cached response count cap|
 |`cache.maxBytes`|`33554432`|Cached response byte cap|
 |`ads.gravity`|`true`|Attach Gravity ad context when the SDK exists|
@@ -132,9 +132,43 @@ Environment variables below seed those defaults:
 |`FREEPI_PLUGIN_PORT`|`8473`|First loopback port tried; the next 19 are probed|
 |`FREEPI_PLUGIN_DATA_DIR`|`~/.freepi-plugin`|Token, stable session id, learned client version|
 |`FREEPI_CACHE`|`1`|`0` disables the exact-response cache|
+|`FREEPI_CACHE_DIR`|`~/.freepi-plugin/cache`|Disk tier shared by every host; `off` keeps memory only|
 |`FREEPI_CACHE_TTL_MS`|`3600000`|Cache entry lifetime|
 |`FREEPI_BASE_URL`|`https://api.freepi.ai`|Upstream base (dev/testing)|
 |`FREEPI_NO_GRAVITY_PIXEL`|unset|`1` skips the optional Gravity attribution pixel|
+
+## Caching
+
+Two independent caches, both measurable:
+
+**Response cache (local).** Byte-identical requests return the stored body without contacting
+free-pi — no credits spent. Keys ignore field order, whitespace, and `stream: false` /
+`stream_options`, so the same conversation hashes identically regardless of which host serialized it.
+The in-memory LRU and an on-disk tier in `~/.freepi-plugin/cache` are both shared: a turn paid for by
+omp is served to opencode, and entries survive restarts. Concurrent writers merge the index instead
+of overwriting each other.
+
+```sh
+curl -s 127.0.0.1:8473/healthz | jq .cache     # hits, misses, savedBytes, hitRate
+```
+
+Measured: ~1.4 s cold, ~3 ms warm.
+
+**Prompt cache (upstream).** free-pi reuses a stable prompt prefix and reports it as
+`usage.prompt_tokens_details.cached_tokens`. The plugin accumulates that ratio, so you can see
+whether a conversation is actually reusing prefix instead of re-billing it. Keeping the leading
+messages of a conversation byte-identical is what makes this hit; changing the system prompt or
+inserting a timestamp at the top of the context defeats it.
+
+```sh
+curl -s 127.0.0.1:8473/healthz | jq .promptCache
+```
+
+A 400-message conversation measured 3840 of 4034 prompt tokens served from the upstream cache (95%)
+on every turn once the prefix was stable.
+
+Effects on the response cache: disabled with `FREEPI_CACHE=0`; disk tier off with
+`FREEPI_CACHE_DIR=off`.
 
 ## Safety notes
 

@@ -7,6 +7,7 @@ import { dirname } from "node:path";
 import { SESSION_ID_PATH, CREDITS_PER_USD } from "./config.ts";
 import type { Upstream, MeStats } from "./upstream.ts";
 import type { ResponseCache, CacheStats } from "./cache.ts";
+import { PromptCacheMeter, type PromptCacheStats } from "./telemetry.ts";
 
 export interface PluginState {
   sessionId: string;
@@ -14,6 +15,8 @@ export interface PluginState {
 }
 
 export interface Ctx {
+  /** Provider-side prompt-cache accounting for /freepi server. */
+  promptCache: PromptCacheMeter;
   upstream: Upstream;
   state: PluginState;
   cache: ResponseCache;
@@ -140,6 +143,7 @@ export interface QuotaView {
     streak_days: number | null;
   };
   cache: CacheStats;
+  promptCache: PromptCacheStats;
 }
 
 /** Authoritative quota view: /me/stats plus /me notice. */
@@ -177,6 +181,7 @@ export async function quotaView(ctx: Ctx, jwt: string): Promise<QuotaView> {
       streak_days: live?.streak?.days ?? null,
     },
     cache: ctx.cache.stats(),
+    promptCache: ctx.promptCache.stats(),
   };
 }
 

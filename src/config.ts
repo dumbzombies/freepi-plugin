@@ -34,9 +34,14 @@ export const UA = "freepi-plugin/1.0";
 
 /** Exact-response cache: on by default; FREEPI_CACHE=0 disables. */
 export const CACHE_ENABLED = process.env.FREEPI_CACHE !== "0";
-export const CACHE_TTL_MS = Number(process.env.FREEPI_CACHE_TTL_MS || 3_600_000);
+// Exact repeats of a paid turn are safe to serve for a day; the byte cap, not
+// the clock, is what bounds this tier.
+export const CACHE_TTL_MS = Number(process.env.FREEPI_CACHE_TTL_MS || 24 * 3_600_000);
 export const CACHE_MAX_ENTRIES = Number(process.env.FREEPI_CACHE_MAX_ENTRIES || 300);
 export const CACHE_MAX_BYTES = Number(process.env.FREEPI_CACHE_MAX_BYTES || 32 * 1024 * 1024);
+/** Disk tier shared by every host; FREEPI_CACHE_DIR=off keeps memory only. */
+export const CACHE_DIR =
+  process.env.FREEPI_CACHE_DIR === "off" ? null : process.env.FREEPI_CACHE_DIR || join(DATA_DIR, "cache");
 
 /** Preferred port; the server probes upward when it is taken. */
 export const PREFERRED_PORT = Number(process.env.FREEPI_PLUGIN_PORT || 8473);
