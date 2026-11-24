@@ -48,7 +48,7 @@ exact-response caching.
 
 ### Tests
 
-`npm test` → **16 pass, 0 fail**:
+`npm test` → **22 pass, 0 fail**:
 - `test/server.test.mjs` — health/models/401 gates.
 - `test/settings.test.mjs` — defaults, validation, round-trip, cache cap, model filters, premium.
 - `test/server-stream.test.mjs` — upstream socket destroyed mid-stream must not hang the client.
@@ -57,6 +57,22 @@ exact-response caching.
 - `test/cache.test.mjs` — key normalization, disk hits across instances, memory-vs-disk labels, TTL.
 - `test/cache-shared.test.mjs` — two writers merging one index.
 - `test/cache-evict.test.mjs` — byte-cap eviction is not undone by the merge.
+- `test/cache-inflight.test.mjs` — an in-flight follower re-fetches instead of inheriting an
+  uncacheable (error) body as a hit.
+- `test/cache-concurrent.test.mjs` — two instances writing at once both persist (index lock).
+- `test/cache-orphan.test.mjs` — expired entries delete their body files.
+- `test/cache-tombstone.test.mjs` — one process's eviction never deletes another's fresh entry.
+- `test/cache-scope.test.mjs` — a different credential never receives another account's body; the
+  token never appears in a key.
+
+### Cache invariants (post-fix, keep these)
+
+- `drain()` returns `null` for `!src.cacheable`: followers re-fetch, telemetry is not fed.
+- `key(body, scope)` — the completions path passes the JWT; scope is hashed, never embedded.
+- Index rewrites take a cross-process lock file (`index.lock`, broken after 5s).
+- Tombstones are timestamped and retired after the write that reflects them.
+- `loadDisk()` unlinks expired bodies.
+- `scripts/serve.mjs` exits 1 if it cannot own the configured port (hosts pin a fixed baseURL).
 
 ## Blockers
 

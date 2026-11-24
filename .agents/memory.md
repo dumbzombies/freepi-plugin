@@ -197,3 +197,40 @@ pi-bolt reads `~/.pi/agent/settings.json`, so `pi-bolt install <dir> --approve` 
 Verification that matters: `pi-bolt --list-models | grep freepi` shows all 10 with 200K/32.8K, and
 `pi-bolt -p --model freepi/deepseek-v4.1-flash` returns the model's answer. `pi-bolt doctor` reports
 the extension as interpreted/loaded; a loaded-but-silent extension means one of the two items above.
+
+## 2026-11-24 — Six cache defects fixed (adversarial pass)
+
+All six came from the disk/in-flight cache added earlier the same day. Each has a regression test.
+
+**F-1 in-flight follower inherited an error body as a hit.** `drain()` settled the shared promise
+with a payload before checking `cacheable`, so a concurrent identical request got `hit-memory` with
+the leader's 500 and `savedBytes` grew. Fix: return `null` for `!src.cacheable`, so followers
+re-fetch. Verified end-to-end: two concurrent posts against a failing upstream → both `500 miss`,
+`hits: 0`.
+
+**F-2 concurrent index writers lost entries.** Merge is read-modify-write; a per-instance promise
+chain cannot help because omp's in-process server and the opencode service are different processes.
+Fix: `withIndexLock()` using `writeFile(..., {flag:"wx"})` on `index.lock`, stale after 5 s.
+Measured before: `[false, true, false]`; after: all survive.
+
+**F-3 expired entries leaked bodies.** `loadDisk()` used `continue` for expired metadata. Fix:
+`unlink` the orphan. Measured: 6 orphans → 1.
+
+**F-4 stale tombstone deleted another process's fresh entry.** `removed` is per-process but applied
+to the shared index. Fix: store eviction *times* and only drop disk copies with `createdAt <=
+evictedAt`; clear the map after the index write lands.
+
+**F-5 `removed` grew unbounded.** 5000 stores → 4950 tombstones. After F-4's retirement: 2000
+evictions → 1.
+
+**H-1 cache key omitted the credential.** The disk tier made this durable, so account A's paid body
+could be replayed to account B. `key(bodyText, scope)` now hashes the scope; completions passes the
+JWT. Never embed the token in the key itself — file names are the key.
+
+**H-2 `serve.mjs` silently bound port+1.** opencode pins `http://127.0.0.1:8473/v1`, so a fallback
+would leave opencode talking to whatever holds 8473 (proved with a fake "impostor" server). The
+script now exits 1 with an actionable message.
+
+Gotcha for future cache work: every one of these was invisible to a *serial* test. If you touch
+`run`/`drain`/`writeIndex`, test with two instances and `Promise.all`, and assert on
+`stats().hits`/`savedBytes`, not just the body.
