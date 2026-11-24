@@ -40,6 +40,23 @@ omp plugin install freepi-plugin         # or from the marketplace entry
 omp plugin doctor                        # expect plugin:freepi-plugin: 0 errors
 ```
 
+### pi-bolt
+
+pi-bolt reads `~/.pi/agent/settings.json`, so this install also covers `pi`:
+
+```sh
+pi-bolt install /path/to/freepi-plugin --approve
+pi-bolt list                             # ../../projects/freepi-plugin
+pi-bolt --list-models | grep freepi      # 10 models
+pi-bolt -p --model freepi/deepseek-v4.1-flash "hi"
+```
+
+The extension depends on two host details that differ between omp and pi-bolt: omp exposes a
+`schema` builder as `pi.zod`, pi-bolt has none (it maps `typebox` imports instead), and pi-bolt
+refuses to run a provider declared without an `apiKey`. The plugin handles both — tool schemas fall
+back to a plain JSON-schema object and the provider declares a placeholder `apiKey` that the loopback
+server treats as "use the token file" rather than as a credential.
+
 ### opencode
 
 opencode's plugin hooks are not invoked by the current build, so this host uses a static provider

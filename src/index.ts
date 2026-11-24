@@ -81,6 +81,10 @@ interface ProviderConfig {
   name?: string;
   baseUrl?: string;
   api?: string;
+  /** Placeholder credential. The loopback server ignores values that are not
+   * JWT-shaped and uses ~/.freepi-plugin/token, but hosts such as pi-bolt refuse
+   * to run a provider whose config has no apiKey at all. */
+  apiKey?: string;
   models?: ProviderModel[];
   oauth?: {
     name: string;
@@ -117,8 +121,10 @@ interface PiApi {
     execute(...args: unknown[]): Promise<ToolResult>;
   }): void;
   on(event: string, handler: (...args: unknown[]) => unknown): void;
-  /** Zod-compatible schema builder used for tool parameters. */
-  zod: { object(shape: Record<string, unknown>): unknown };
+  /** Schema builders, host-dependent. omp exposes `zod`; pi and pi-bolt map
+   * the `typebox` import to their own copy and expose no builder on `pi`. */
+  zod?: { object(shape: Record<string, unknown>): unknown };
+  typebox?: { Type?: { Object(shape: Record<string, unknown>): unknown } };
 }
 
 // ---------- constants ----------
@@ -153,6 +159,7 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
     name: "Free Pi",
     baseUrl: running.url,
     api: "openai-completions",
+    apiKey: "freepi",
     models: hostModels(running.ctx.upstream.catalog, settings),
     oauth: {
       name: "Free Pi (GitHub)",
@@ -533,7 +540,9 @@ export default async function freepiPlugin(pi: PiApi): Promise<void> {
     name: "freepi_quota",
     label: "Free Pi quota",
     description: "Show the current free-pi account's daily credit quota, usage, and refill time.",
-    parameters: pi.zod.object({}),
+    // A tool with no arguments: every supported schema builder accepts {}.
+    // Hosts that expose no builder fall back to a bare JSON-schema object.
+    parameters: pi.zod?.object({}) ?? pi.typebox?.Type?.Object?.({}) ?? { type: "object", properties: {} },
     async execute(): Promise<ToolResult> {
       const token = await loadToken();
       if (!token) {
