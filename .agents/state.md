@@ -46,12 +46,15 @@ exact-response caching.
 
 ### Tests
 
-`npm test` → **10 pass, 0 fail**:
+`npm test` → **16 pass, 0 fail**:
 - `test/server.test.mjs` — health/models/401 gates.
 - `test/settings.test.mjs` — defaults, validation, round-trip, cache cap, model filters, premium.
 - `test/server-stream.test.mjs` — upstream socket destroyed mid-stream must not hang the client.
 - `test/server-auth.test.mjs` — placeholder `apiKey` falls back to the token file; the JWT is what
   goes upstream.
+- `test/cache.test.mjs` — key normalization, disk hits across instances, memory-vs-disk labels, TTL.
+- `test/cache-shared.test.mjs` — two writers merging one index.
+- `test/cache-evict.test.mjs` — byte-cap eviction is not undone by the merge.
 
 ## Blockers
 
