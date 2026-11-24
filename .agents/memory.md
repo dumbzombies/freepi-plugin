@@ -178,3 +178,22 @@ prompt tokens reused on each turn of a 400-message conversation with a stable pr
 
 `scripts/quota.mjs` now asks the running service (`/v1/quota`) before falling back to a throwaway
 server: only the live process has real counters.
+
+## 2026-11-24 — pi and pi-bolt: two host-API differences
+
+pi-bolt reads `~/.pi/agent/settings.json`, so `pi-bolt install <dir> --approve` covers both `pi` and
+`pi-bolt`. Two things broke the extension there and both are fixed in `src/index.ts`:
+
+1. **No `pi.zod`.** omp exposes a schema builder as `pi.zod.object(...)`; pi/pi-bolt expose none —
+   their docs import `Type` from `typebox`, which the host maps to its own copy. The tool now uses
+   `pi.zod?.object({}) ?? pi.typebox?.Type?.Object?.({}) ?? { type: "object", properties: {} }`.
+   Symptom when broken: `Failed to load extension … undefined is not an object (evaluating
+   'pi.zod.object')` and no provider at all.
+2. **`apiKey` is mandatory.** pi-bolt exits `No API key found for freepi` for a provider config with
+   no `apiKey`, even with an `oauth` block. The provider now declares `apiKey: "freepi"`; the
+   loopback `bearer()` ignores non-JWT values and falls back to `~/.freepi-plugin/token`, so this is
+   a placeholder, not a credential — do not "fix" it by putting a real token there.
+
+Verification that matters: `pi-bolt --list-models | grep freepi` shows all 10 with 200K/32.8K, and
+`pi-bolt -p --model freepi/deepseek-v4.1-flash` returns the model's answer. `pi-bolt doctor` reports
+the extension as interpreted/loaded; a loaded-but-silent extension means one of the two items above.
