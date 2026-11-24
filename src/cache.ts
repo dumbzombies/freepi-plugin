@@ -6,7 +6,7 @@
 // lets one host's paid turn serve the other.
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CACHE_DIR, CACHE_ENABLED, CACHE_MAX_BYTES, CACHE_MAX_ENTRIES, CACHE_TTL_MS } from "./config.ts";
 
@@ -120,8 +120,12 @@ export class ResponseCache {
   private readonly entries = new Map<string, Entry>();
   /** Response metadata for disk entries, which carry no payload until read. */
   private readonly status = new Map<string, number>();
-  /** Keys evicted here: the merge in writeIndex must not resurrect them. */
-  private readonly removed = new Set<string>();
+  /** Key → eviction time. A tombstone may only drop the disk copy that existed
+   * when this process evicted it; a fresher entry from another process (or a
+   * later re-store here) must survive. Retired once disk reflects the merge. */
+  private readonly removed = new Map<string, number>();
+  /** Serializes index writes: two concurrent read-modify-write cycles lose
+   * whichever entry was read before the other's rename landed. */
   private readonly ctype = new Map<string, string>();
   private readonly inflight = new Map<string, Promise<CachedPayload | null>>();
   private bytes = 0;
@@ -162,16 +166,25 @@ export class ResponseCache {
     }
   }
 
-  /** Stable key for a request body, or null when the body is not JSON. */
-  key(bodyText: string): string | null {
+  /** Stable key for a request body, or null when the body is not JSON.
+   *
+   * `scope` partitions the tier: the completions path passes the account
+   * credential, because one account's paid turn must never be replayed to a
+   * different one that happens to send the same prompt. */
+  key(bodyText: string, scope = ""): string | null {
     let parsed: unknown;
     try {
       parsed = JSON.parse(bodyText);
     } catch {
       return null;
     }
+    // Hash the scope rather than embedding it: file names are the key, and a
+    // bearer token must never appear in a path.
+    const scopeHash = scope
+      ? createHash("sha256").update(scope).digest("hex").slice(0, 16)
+      : "shared";
     return createHash("sha256")
-      .update(`${HASH_PREFIX}${JSON.stringify(canonical(normalizeForCache(parsed)))}`)
+      .update(`${HASH_PREFIX}${scopeHash}\n${JSON.stringify(canonical(normalizeForCache(parsed)))}`)
       .digest("hex");
   }
 
@@ -204,6 +217,9 @@ export class ResponseCache {
       const pending = this.inflight.get(key);
       if (pending) {
         const payload = await pending.catch(() => null);
+        // The follower shares the leader's result, including its failures: a
+        // non-cacheable body (upstream error) must be re-fetched, not sold as
+        // a hit, or the metrics and the caller both lie.
         if (payload) {
           this.hits++;
           this.savedBytes += payload.body.byteLength;
@@ -271,9 +287,11 @@ export class ResponseCache {
     }
     if (tooBig) return null;
     const payload: CachedPayload = { status: src.status, ctype: src.ctype, body: concat(chunks, size) };
-    // Usage telemetry runs on every successful body, cached or not.
-    if (src.cacheable) onPayload?.(payload);
-    if (store && src.cacheable) await this.store(key, payload);
+    // Uncacheable bodies (upstream errors) are never reported to followers nor
+    // metered: only a successful turn has usage worth counting.
+    if (!src.cacheable) return null;
+    onPayload?.(payload);
+    if (store) await this.store(key, payload);
     return payload;
   }
 
@@ -333,7 +351,7 @@ export class ResponseCache {
   private delete(key: string): void {
     const entry = this.entries.get(key);
     if (!entry) return;
-    this.removed.add(key);
+    this.removed.set(key, this.now());
     this.bytes -= entry.size;
     this.entries.delete(key);
     this.status.delete(key);
@@ -359,7 +377,11 @@ export class ResponseCache {
       if (raw.version !== 1 || !raw.entries) return;
       const now = this.now();
       for (const [key, meta] of Object.entries(raw.entries)) {
-        if (now - meta.createdAt > this.ttlMs) continue;
+        if (now - meta.createdAt > this.ttlMs) {
+          // Expired: the body would otherwise outlive every reference to it.
+          void unlink(this.bodyPath(key)).catch(() => undefined);
+          continue;
+        }
         this.entries.set(key, { payload: null, size: meta.size, createdAt: meta.createdAt });
         this.bytes += meta.size;
         this.status.set(key, meta.status);
@@ -380,7 +402,39 @@ export class ResponseCache {
     const tmp = join(dir, `${key}.${process.pid}.tmp`);
     await writeFile(tmp, payload.body);
     await rename(tmp, this.bodyPath(key));
-    await this.writeIndex();
+    await this.withIndexLock(() => this.writeIndex());
+  }
+
+  /** Serialize index rewrites across instances *and* processes: the merge is
+   * read-modify-write, so two cycles running at once each persist the base they
+   * read and drop the other's key. A per-instance promise chain is not enough —
+   * omp's in-process server and the opencode service are different processes. */
+  private async withIndexLock<T>(fn: () => Promise<T>): Promise<T> {
+    const lock = join(this.dir as string, "index.lock");
+    const deadline = this.now() + 5_000;
+    let held = false;
+    while (!held) {
+      try {
+        await writeFile(lock, String(process.pid), { flag: "wx" });
+        held = true;
+      } catch {
+        // Stale lock from a crashed writer must not block the tier forever.
+        try {
+          if (this.now() - (await stat(lock)).mtimeMs > 5_000) await unlink(lock);
+        } catch {
+          // Lock vanished between attempts: retry immediately.
+        }
+        if (this.now() > deadline) break;
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, 5);
+        await promise;
+      }
+    }
+    try {
+      return await fn();
+    } finally {
+      if (held) await unlink(lock).catch(() => undefined);
+    }
   }
 
   private async writeIndex(): Promise<void> {
@@ -394,7 +448,10 @@ export class ResponseCache {
       if (disk.version === 1 && disk.entries) {
         const now = this.now();
         for (const [key, meta] of Object.entries(disk.entries)) {
-          if (this.removed.has(key)) continue;
+          // Drop only the copy this process evicted; anything written after
+          // that eviction is newer and must survive the merge.
+          const evictedAt = this.removed.get(key);
+          if (evictedAt !== undefined && meta.createdAt <= evictedAt) continue;
           if (now - meta.createdAt <= this.ttlMs) entries[key] = meta;
         }
       }
@@ -416,5 +473,8 @@ export class ResponseCache {
     const tmp = join(dir, `index.${process.pid}.tmp`);
     await writeFile(tmp, JSON.stringify({ version: 1, entries } satisfies DiskIndex));
     await rename(tmp, this.indexPath);
+    // Disk now reflects this process's evictions; keeping them would make the
+    // set grow without bound and outlive its meaning.
+    this.removed.clear();
   }
 }

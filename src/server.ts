@@ -113,7 +113,8 @@ async function completions(req: IncomingMessage, res: ServerResponse, ctx: Ctx):
     return;
   }
 
-  const cacheKey = ctx.cache.key(raw);
+  // Scoped by credential: never replay one account's turn to another.
+  const cacheKey = ctx.cache.key(raw, jwt);
   const controller = new AbortController();
   res.once("close", () => controller.abort());
 
