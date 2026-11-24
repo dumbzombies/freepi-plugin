@@ -146,3 +146,35 @@ Consequences and the adopted shape:
 Gotcha: writing the provider block into `opencode.jsonc` by hand breaks the document easily — the
 mistral-vibe object's closing brace is easy to swallow. Validate after editing (parse with comments
 stripped) before running opencode, or all providers disappear from `opencode models`.
+
+## 2026-11-24 — Caching: two independent tiers, both measurable
+
+**Response cache** (`src/cache.ts`) is now memory + disk. `CACHE_DIR` defaults to
+`~/.freepi-plugin/cache` and is shared by every host, so a turn paid for by omp is served to the
+opencode service and entries survive restarts (`x-freepi-cache: hit-disk`). Verified: cold 1.4 s vs
+warm 3 ms, and a hit after `sv restart freepi-loopback`.
+
+Key rules that make hits possible — do not "clean these up":
+
+- `normalizeForCache` drops `stream` and `stream_options` unless `stream === true`. Hosts that add
+  `"stream": false` or `include_usage` must hash to the same entry, or every host gets its own copy.
+- `canonical()` sorts object keys recursively. Field order differs between hosts.
+- Do **not** replace `JSON.stringify(canonical(x))` with a hand-built canonical string or with
+  per-scalar `hash.update()` calls. Measured on a 170 KiB body: native 0.86 ms, hand-built 1.07 ms,
+  per-scalar 1.93 ms. Both "optimizations" were tried and reverted.
+
+Disk-tier gotchas:
+
+- `store()` must `await writeDisk` before the run's `done` settles, or a caller that awaits `done`
+  and then reads from another process misses.
+- Two servers share the directory. `writeIndex` merges the on-disk index (skipping keys in
+  `removed`), and temp files carry `process.pid` so writers never rename over each other.
+- Disk entries load as metadata only (`payload: null`); the body is read on first hit.
+
+**Prompt cache** is upstream, not ours: free-pi reports `usage.prompt_tokens_details.cached_tokens`.
+`src/telemetry.ts` extracts it from the last `"usage"` object in JSON or SSE and `/healthz`,
+`/v1/quota`, `/freepi server`, and `scripts/quota.mjs` all show the ratio. Measured 3840/4034 (95%)
+prompt tokens reused on each turn of a 400-message conversation with a stable prefix.
+
+`scripts/quota.mjs` now asks the running service (`/v1/quota`) before falling back to a throwaway
+server: only the live process has real counters.
