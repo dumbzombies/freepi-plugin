@@ -2,8 +2,8 @@
 
 ## Goal
 
-Provide free-pi (freepi.ai) as a native provider in two hosts — pi/omp (full extension) and
-opencode (static provider + shared loopback server) — with GitHub device login, quota/status
+Provide free-pi (freepi.ai) as a native provider in pi, omp, and pi-bolt (one full extension, shared
+`~/.pi/agent/settings.json`) and in opencode (static provider + shared loopback server) — with GitHub device login, quota/status
 commands, and an OpenAI-compatible API that preserves ad billing, session rotation, and
 exact-response caching.
 
@@ -43,6 +43,8 @@ exact-response caching.
 
 - Linked with `omp plugin link ~/projects/freepi-plugin` (`~/.omp/plugins/node_modules/freepi-plugin`).
 - `omp models` shows `freepi (10)`; `omp -p --model freepi/deepseek-v4.1-flash` completes.
+- `pi-bolt install <dir> --approve` writes `~/.pi/agent/settings.json` (shared with `pi`);
+  `pi-bolt --list-models` lists the same 10 and `pi-bolt -p` completes.
 
 ### Tests
 
